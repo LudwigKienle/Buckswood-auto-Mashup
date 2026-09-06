@@ -51,13 +51,17 @@ The base installer installs pinned Python dependencies, checks out a fixed AutoM
 
 The mastering target is −14 LUFS integrated / −1.2 dBTP; these are targets, not a promise of perceptual quality. The float buses let you finish the mix in a DAW.
 
-## Audio processing improvements (V4)
+## Audio processing improvements (V5)
+
+V5 preserves short vocal pickups and releases across bar boundaries when a sustained pause bounds the original phrase and the neighboring singer leaves space. It uses up to roughly two beats of actual source audio (capped at 1.6 seconds), keeps the bar grid and arrangement duration fixed, and skips uncertain or occupied extensions. **Auftakte und Wortenden erhalten** can be switched off for comparison. Manually offset vocal sections retain manual timing without automatic handles.
+
+The planner now measures sustained vocal pauses and penalizes phrases whose endings or pickups would collide at the singer handover. This is acoustic phrase-boundary detection, not transcription or lyric understanding. Existing cached profiles and exports remain available; new profiles use a separate cache.
 
 V4 processes a complete backing as one stereo signal and keeps continuing backing/vocal passages in one stretch pass. Hybrid arrangements recombine bass and other instruments before stretching. Fixed pitch shifts use Rubber Band's high-quality mode, and small detector jitter does not force unnecessary timing corrections.
 
 EQ and vocal-triggered backing reduction run across the assembled song, with a smooth release and phase-aligned midrange extraction. New imports retain float precision. The planner compares 8- and 16-bar candidates and penalizes prominent vocal-timbre/activity changes inside a phrase. These are heuristics, not lyric or speaker recognition. The separation models themselves have not changed.
 
-New exports are labeled **V4**. Switching results in the history keeps the playback position for comparisons. Existing exports remain available.
+New exports are labeled **V5**. Switching results in the history keeps the playback position for comparisons. Restored pickups/releases are counted below the player and recorded in the arrangement JSON, including handles that could not fit.
 
 ## Local storage and updates
 

@@ -24,6 +24,7 @@ class RenderRequest(BaseModel):
     key_match: bool = True
     pitch_b: float | None = Field(default=None, ge=-6, le=6)
     separation_quality: Literal['auto', 'standard', 'hq'] = 'auto'
+    protect_vocal_phrases: bool = True
     preview: bool = False
     sections: list[Section] = Field(min_length=1, max_length=16)
 

@@ -133,7 +133,7 @@ def timing_map(anchors, ratio, context_frames, output_context, target_bpm):
             for at,to in zip(anchors, ideal)}
 
 
-def source_clip(track, stem, start, bars, bpm, target_bpm, shift, cancel, manual=False, tail_seconds=0., quality='auto'):
+def source_clip(track, stem, start, bars, bpm, target_bpm, shift, cancel, manual=False, tail_seconds=0., quality='auto', head_seconds=0.):
     check_cancel(cancel)
     start, end, anchors, _ = clip_timing(track, start, bars, bpm, manual)
     seconds = end-start
@@ -141,7 +141,7 @@ def source_clip(track, stem, start, bars, bpm, target_bpm, shift, cancel, manual
     input_tail = tail_seconds/ratio
     from .separation import stems_folder
     source_start = round(start*SR)
-    context = min(source_start, round(.12*SR))
+    context = min(source_start, round((.12+head_seconds/ratio)*SR))
     audio = read_component(stems_folder(track, quality), stem, source_start-context,
                            context+round((seconds+input_tail)*SR))
     if len(audio)-context < SR/2:
@@ -153,7 +153,12 @@ def source_clip(track, stem, start, bars, bpm, target_bpm, shift, cancel, manual
     mapping = timing_map(anchors, ratio, context, output_context, target_bpm)
     result = stretch(audio, ratio, shift if stem != 'drums' else 0, vocal=stem=='vocals',
                      keyframes=mapping, percussive=stem=='drums')
-    return fit(result[output_context:], round(bars*240/target_bpm*SR)+round(tail_seconds*SR))
+    head = round(head_seconds*SR)
+    begin = output_context-head
+    if begin < 0:
+        result = np.pad(result, ((-begin, 0), (0, 0)))
+        begin = 0
+    return fit(result[begin:], head+round(bars*240/target_bpm*SR)+round(tail_seconds*SR))
 
 def offset_audio(audio, beats, bpm):
     shift = round(beats*60/bpm*SR)
@@ -223,7 +228,8 @@ def mix_space(vocal, bed, vocal_gain=None):
     bed = bed-mid*(.23*np.clip(envelope/.10, 0, 1))[:, None]
     return vocal, bed
 
-def join_parts(vocal_parts, bed_parts, tails, sections, continuations=None, bed_continuations=None):
+def join_parts(vocal_parts, bed_parts, tails, sections, continuations=None, bed_continuations=None,
+               heads=None, vocal_edits=None, handle_limit=1.6):
     vocals, bed = np.concatenate(vocal_parts), np.concatenate(bed_parts)
     boundary = 0
     for i in range(1, len(sections)):
@@ -235,7 +241,7 @@ def join_parts(vocal_parts, bed_parts, tails, sections, continuations=None, bed_
             ramp = np.linspace(0, 1, n)[:, None]
             bed[boundary:boundary+n] = bt[:n]*(1-ramp)+bed[boundary:boundary+n]*ramp
         n = min(len(vt), round(.18*SR), len(vocals)-boundary)
-        if n and not (continuations and continuations[i]):
+        if heads is None and n and not (continuations and continuations[i]):
             incoming = vocals[boundary:boundary+n]
             # Preserve a natural release only when the incoming singer leaves space.
             if active_rms(incoming) < .018:
@@ -244,6 +250,12 @@ def join_parts(vocal_parts, bed_parts, tails, sections, continuations=None, bed_
                 short = min(n, round(.008*SR))
                 ramp = np.linspace(0, 1, short)[:, None]
                 incoming[:short] = vt[:short]*(1-ramp)+incoming[:short]*ramp
+    if heads is not None:
+        from .phrases import restore_vocal_edges
+        edits = restore_vocal_edges(vocals, vocal_parts, heads, [t[0] for t in tails],
+            continuations or [False]*len(sections), sections, SR, max(active_rms(vocals), .008), handle_limit)
+        if vocal_edits is not None:
+            vocal_edits.extend(edits)
     for signal in (vocals, bed):
         n = min(round(.012*SR), len(signal)//2)
         signal[:n] *= np.linspace(0, 1, n)[:, None]
@@ -332,7 +344,13 @@ def render(request, job_id, progress, cancel):
             selected.append(s.model_copy(update={'bars': min(s.bars, remaining)}))
             remaining -= selected[-1].bars
         sections = selected
-    vocal_parts, bed_parts, tails, report = [], [], [], []
+    vocal_parts, bed_parts, tails, heads, report = [], [], [], [], []
+    from .phrases import handle_duration
+    handle_seconds = handle_duration(target) if request.protect_vocal_phrases else .18
+    # Read beyond the edit limit to verify the FULL bounding pause; a pause
+    # near the end of a handle must not be mistaken for a short consonant gap.
+    context_seconds = handle_seconds+.25 if request.protect_vocal_phrases else .18
+    head_length = round(context_seconds*SR) if request.protect_vocal_phrases else 0
     gains, voice_gains = {}, {}
     for name, track in tracks.items():
         wave, _ = sf.read(TRACKS / track['id'] / 'audio.wav', dtype='float32', always_2d=True)
@@ -358,7 +376,7 @@ def render(request, job_id, progress, cancel):
         check_cancel(cancel)
         progress(45+int(i/len(sections)*43), f'Abschnitt {i+1}/{len(sections)}: {section.name}')
         length = round(section.bars*240/target*SR)
-        tail_length = round(.18*SR)
+        tail_length = round(context_seconds*SR)
         def clip(source, stem):
             first_index, count, preceding = beds[i, source, stem]
             first = sections[first_index]
@@ -373,6 +391,7 @@ def render(request, job_id, progress, cancel):
             return fit(bed_cache[key][offset:offset+length+tail_length].copy(), length+tail_length)
         if section.vocal == 'none':
             vocal = np.zeros((length+tail_length, 2), np.float32)
+            head = np.zeros((head_length, 2), np.float32)
         else:
             run_start, run_bars, preceding_bars = runs[i]
             first = sections[run_start]
@@ -382,14 +401,17 @@ def render(request, job_id, progress, cancel):
             if key not in voice_cache:
                 voice_cache[key] = source_clip(tracks[source], 'vocals', start, run_bars, bpms[source], target,
                     pitch if source=='B' else 0, cancel, manual=bool(request.bpm_a if source=='A' else request.bpm_b),
-                    tail_seconds=.18, quality=backends[source]) * gains[source]
-            offset = round(preceding_bars*240/target*SR)
+                    tail_seconds=context_seconds, quality=backends[source], head_seconds=head_length/SR) * gains[source]
+            offset = head_length+round(preceding_bars*240/target*SR)
+            head = voice_cache[key][offset-head_length:offset].copy()
             vocal = fit(voice_cache[key][offset:offset+length+tail_length].copy(), length+tail_length)
         bed = sum(clip(source, stem) for source, stem in backing_components(section))
         vocal = offset_audio(vocal, section.vocal_offset, target)
         vocal *= voice_gains.get(section.vocal, 1.)
         vocal *= 10**(section.vocal_db/20)
+        head *= voice_gains.get(section.vocal, 1.)*10**(section.vocal_db/20)
         bed *= 10**(section.instrumental_db/20)
+        heads.append(head)
         tails.append((vocal[length:].copy(), bed[length:].copy()))
         vocal, bed = shape_section(vocal[:length], bed[:length], section.effect, target)
         vocal_parts.append(vocal)
@@ -416,7 +438,9 @@ def render(request, job_id, progress, cancel):
     bed_continuations = [False]+[backing_components(sections[i-1]) == backing_components(sections[i]) and
         all(beds[i, source, stem][0] != i for source, stem in backing_components(sections[i]))
         for i in range(1, len(sections))]
-    vocals, instrumental = join_parts(vocal_parts, bed_parts, tails, sections, continuations, bed_continuations)
+    vocal_edits = []
+    vocals, instrumental = join_parts(vocal_parts, bed_parts, tails, sections, continuations, bed_continuations,
+        heads if request.protect_vocal_phrases else None, vocal_edits, handle_seconds)
     del vocal_parts, bed_parts, bed_cache, voice_cache
     vocals, instrumental = mix_space(vocals, instrumental, vocal_gain=1.)
     check_cancel(cancel)
@@ -438,12 +462,16 @@ def render(request, job_id, progress, cancel):
                '-ar', str(SR), '-c:a', 'pcm_s24le', str(folder/'mashup.wav')])
     run_audio(['ffmpeg', '-v', 'error', '-y', '-i', str(folder/'mashup.wav'), '-c:a', 'libmp3lame', '-b:a', '320k', str(folder/'mashup.mp3')])
     check_cancel(cancel)
-    result = {'id': job_id, 'name': ('Vorschau · V4' if request.preview else 'Arrangement · V4')+(' · RoFormer' if all(v=='hq' for v in backends.values()) else ' · Demucs' if all(v=='standard' for v in backends.values()) else ' · gemischte Stems'), 'duration': round(elapsed, 2),
-              'bpm': target, 'pitch_b': pitch, 'engine_version': 4, 'separation': backends, 'track_a': a['name'], 'track_b': b['name'], 'sections': report,
+    result = {'id': job_id, 'name': ('Vorschau · V5' if request.preview else 'Arrangement · V5')+(' · RoFormer' if all(v=='hq' for v in backends.values()) else ' · Demucs' if all(v=='standard' for v in backends.values()) else ' · gemischte Stems'), 'duration': round(elapsed, 2),
+              'bpm': target, 'pitch_b': pitch, 'engine_version': 5, 'separation': backends, 'track_a': a['name'], 'track_b': b['name'], 'sections': report,
               'warnings': warnings, 'request': request.model_dump(), 'mastering': {'target_lufs': -14, 'target_true_peak_db': -1.2},
               'processing': {'backing': 'sum-before-stretch; continuous source runs', 'pitch': 'Rubber Band high quality',
-                             'mix': 'continuous EQ; zero-phase midrange duck; 180 ms release', 'grid_jitter_tolerance_ms': 12},
+                             'mix': 'continuous EQ; zero-phase midrange duck; 180 ms release', 'grid_jitter_tolerance_ms': 12,
+                             'vocal_phrase_protection': request.protect_vocal_phrases,
+                             'vocal_handle_limit_seconds': handle_seconds, 'vocal_edits': vocal_edits},
               'stems_note': 'Zeitlich ausgerichtete Gesangs- und Instrumentalbusse vor Mastering, 32-bit float, 44.1 kHz.'}
+    if not request.protect_vocal_phrases:
+        result['name'] += ' · ohne Phrasenschutz'
     save_json(folder/'arrangement.json', result)
     with zipfile.ZipFile(folder/'stems.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
         for filename in ('vocals.wav', 'instrumental.wav', 'arrangement.json'):

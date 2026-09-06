@@ -8,8 +8,9 @@ import math
 import numpy as np
 import librosa
 from .storage import TRACKS, save_json
+from .phrases import quiet_regions, phrase_boundary, HANDLE_SECONDS, handle_duration
 
-VERSION = 2
+VERSION = 3
 
 
 def ensure_grid(track, progress, cancel):
@@ -44,7 +45,7 @@ def boundary_cost(envelope, times, at, reference):
 
 def profile(track, progress, cancel):
     from .engine import separate, check_cancel
-    path = TRACKS / track['id'] / 'musical-profile-v2.json'
+    path = TRACKS / track['id'] / 'musical-profile-v3.json'
     from .separation import selected_backend
     backend = selected_backend(track, 'auto')
     if path.exists():
@@ -106,7 +107,8 @@ def profile(track, progress, cancel):
     if spans:
         tempo = float(np.median(spans))
     value = {'version': VERSION, 'separation': backend, 'model': grid['model'], 'bpm': round(tempo, 2),
-             'voice_reference': reference, 'bars': bars}
+             'voice_reference': reference, 'bars': bars,
+             'vocal_gaps': quiet_regions(voice_env, times, reference)}
     save_json(path, value)
     track.update(bpm=value['bpm'], musical_analysis={'model': grid['model'], 'bars': len(bars), 'version': VERSION})
     save_json(path.parent / 'track.json', track)
@@ -138,7 +140,7 @@ def add_structure(bars, reference):
         peak = novelty[i] >= max(novelty[max(0,i-2):i+3])
         bar['structure'] = float(novelty[i]) if peak and novelty[i] >= threshold else 0.
 
-def candidates(profile, count):
+def candidates(profile, count, handle_seconds=HANDLE_SECONDS):
     result = []
     bars = profile['bars']
     for i in range(len(bars)-count+1):
@@ -147,7 +149,17 @@ def candidates(profile, count):
             continue
         activity = np.concatenate([r['activity'] for r in rows])
         active = activity > max(.006, profile['voice_reference']*.25)
+        if 'vocal_gaps' in profile:
+            entry = phrase_boundary(profile['vocal_gaps'], rows[0]['start'], 'start', handle_seconds)
+            release = phrase_boundary(profile['vocal_gaps'], rows[-1]['end'], 'end', handle_seconds)
+        else:
+            entry = {'risk': rows[0]['cut'], 'extension': 0., 'clearance': 0.}
+            release = {'risk': rows[-1]['end_cut'], 'extension': 0., 'clearance': 0.}
         result.append({'index': i, 'start': rows[0]['start'], 'end': rows[-1]['end'],
+                       'entry': entry, 'release': release,
+                       'phrase_risk': .5*max(entry['risk'], release['risk'])+.25*(entry['risk']+release['risk']),
+                       'entry_beats': (entry['clearance']-entry['extension'])*profile['bpm']/60,
+                       'release_beats': (release['extension']-release['clearance'])*profile['bpm']/60,
                        'cut': .5*max(rows[0]['cut'], rows[-1]['end_cut'])+.25*(rows[0]['cut']+rows[-1]['end_cut']),
                        'internal_change': max((r.get('structure', 0.) for r in rows[1:]), default=0.),
                        'entry_change': rows[0].get('structure', 0.),
@@ -186,10 +198,11 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
     A's harmony enter under the continuing B phrase. Lyrics are not interpreted.
     """
     choices = []
+    target = round(math.sqrt(profiles['A']['bpm']*profiles['B']['bpm']))
     for count in (16, 8):
         half = count//2
-        ca = candidates(profiles['A'], count)
-        cb = candidates(profiles['B'], count)
+        ca = candidates(profiles['A'], count, handle_duration(target)*target/profiles['A']['bpm'])
+        cb = candidates(profiles['B'], count, handle_duration(target)*target/profiles['B']['bpm'])
         by_b = {v['index']: v for v in cb}
         aa = [v for v in ca if .3 <= v['coverage'] <= .98 and
               v['index']+count+4 <= len(profiles['A']['bars']) and
@@ -216,6 +229,11 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
                                             bv['active'][half*8:], voice_shift=pitch)
                     match = .65*forward+.35*reverse
                     value = match-.12*abs(forward-reverse)-.18*av['cut']-.18*bv['cut']
+                    value -= .16*(av['phrase_risk']+bv['phrase_risk'])
+                    # Pickups precede a downbeat, releases follow it. Penalize
+                    # overlaps at A -> B instead of assuming both will fit.
+                    overlap = max(0., av['release_beats']-bv['entry_beats'])
+                    value -= .14*min(overlap, 1.5)/1.5
                     value += .035*min(av['coverage'], .75)+.035*min(bv['coverage'], .75)
                     value -= .05*abs(bed['intensity']-.8)
                     value -= .012*abs(pitch)+.03*max(0, abs(pitch)-2)+.01*max(0, abs(pitch)-3)
@@ -253,18 +271,21 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
     margin = pitch_ranked[0][0]-pitch_ranked[1][0] if len(pitch_ranked)>1 else None
     note = (f'Zwei feste Motive mit jeweils {count} fortlaufenden Takten. Beim Einstieg von B bleibt dessen '
             'Begleitung erhalten; die Instrumente von A kommen später hinzu. Das erste Motiv kehrt im Drop zurück. '
-            'Gesangspausen, Tonhöhen und auffällige Klangwechsel werden geprüft. '
+            'Längere Gesangspausen, Platz für Auftakte und Wortenden sowie Tonhöhen und Klangwechsel werden geprüft. '
             'Textbedeutung, Sprecher und Akkorde werden nicht sicher erkannt.')
     if margin is not None and margin < .015:
         note += f' Tonhöhe unklar: {pitch:+d} und {pitch_ranked[1][1]:+d} Halbtöne bitte vergleichen.'
     return {'sections': sections, 'pitch_b': pitch,
-            'target_bpm': round(math.sqrt(profiles['A']['bpm']*profiles['B']['bpm'])),
-            'analysis': {'version': 4, 'phrase_bars': count, 'strategy': 'continuous-themes',
+            'target_bpm': target,
+            'analysis': {'version': 5, 'phrase_bars': count, 'strategy': 'continuous-themes',
                          'bpm_a': profiles['A']['bpm'], 'bpm_b': profiles['B']['bpm'],
                          'themes': {'A': [av['start'], av['end']], 'B': [bv['start'], bv['end']]},
                          'similarity_a_over_b': forward, 'similarity_b_over_a': reverse,
                          'boundary_activity_a': av['cut'], 'boundary_activity_b': bv['cut'],
                          'pitch_candidates': [{'shift': s, 'score': q, 'phrase_bars': n} for q,s,n,_ in pitch_ranked],
                          'internal_structure_change': {'A': av['internal_change'], 'B': bv['internal_change']},
+                         'phrase_boundaries': {'A': {'start': av['entry'], 'end': av['release']},
+                                               'B': {'start': bv['entry'], 'end': bv['release']}},
+                         'handover_overlap_beats': max(0., av['release_beats']-bv['entry_beats']),
                          'pitch_margin': margin, 'alternative_pitch': pitch_ranked[1][1] if len(pitch_ranked)>1 else None,
                          'note': note}}
