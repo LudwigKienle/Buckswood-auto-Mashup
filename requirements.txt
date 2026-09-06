@@ -1,0 +1,14 @@
+numpy==1.26.4
+torch==2.5.1
+torchaudio==2.5.1
+demucs==4.0.1
+librosa==0.11.0
+pyrubberband==0.4.0
+matplotlib==3.11.1
+soundfile==0.14.0
+scipy==1.17.1
+fastapi==0.141.1
+uvicorn==0.52.4
+python-multipart==0.0.32
+beat-this==1.1.0
+rotary-embedding-torch==0.9.1

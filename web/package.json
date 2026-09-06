@@ -1,0 +1,19 @@
+{
+  "name": "buckswood-auto-mashup",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0"
+  },
+  "license": "GPL-3.0-only",
+  "description": "Local automatic mashup studio for Apple Silicon"
+}

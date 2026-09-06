@@ -1,0 +1,5 @@
+mlx==0.32.2
+numpy==2.4.6
+soundfile==0.14.0
+huggingface-hub==1.30.0
+# Install mlx-audio==0.5.1 separately with --no-deps; only its RoFormer package is used.
