@@ -51,6 +51,14 @@ The base installer installs pinned Python dependencies, checks out a fixed AutoM
 
 The mastering target is −14 LUFS integrated / −1.2 dBTP; these are targets, not a promise of perceptual quality. The float buses let you finish the mix in a DAW.
 
+## Audio processing improvements (V4)
+
+V4 processes a complete backing as one stereo signal and keeps continuing backing/vocal passages in one stretch pass. Hybrid arrangements recombine bass and other instruments before stretching. Fixed pitch shifts use Rubber Band's high-quality mode, and small detector jitter does not force unnecessary timing corrections.
+
+EQ and vocal-triggered backing reduction run across the assembled song, with a smooth release and phase-aligned midrange extraction. New imports retain float precision. The planner compares 8- and 16-bar candidates and penalizes prominent vocal-timbre/activity changes inside a phrase. These are heuristics, not lyric or speaker recognition. The separation models themselves have not changed.
+
+New exports are labeled **V4**. Switching results in the history keeps the playback position for comparisons. Existing exports remain available.
+
 ## Local storage and updates
 
 The default data folder remains `~/Library/Application Support/Mashup Studio` for compatibility with earlier local builds. It contains `app`, `runtime`, `separation-runtime`, `tracks`, `exports`, `jobs` and model/build caches. Existing libraries do not need migrating when the product name changes.

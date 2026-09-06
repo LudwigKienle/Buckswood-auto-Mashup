@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 import numpy as np
 import soundfile as sf
-from scipy.signal import butter, sosfilt
+from scipy.signal import butter, sosfilt, sosfiltfilt
 from .rubberband import Option
 from .analysis import SR, run_audio
 from .storage import TRACKS, EXPORTS, read_track, save_json
@@ -66,6 +66,8 @@ def stretch(audio, ratio=1., semitones=0., vocal=False, keyframes=None, percussi
         return audio.copy()
     from .rubberband import offline
     options = int(Option.PROCESS_OFFLINE) | int(Option.ENGINE_FASTER if percussive else Option.ENGINE_FINER) | int(Option.CHANNELS_TOGETHER) | int(Option.THREADING_NEVER)
+    if abs(semitones) > .00001:
+        options |= int(Option.PITCH_HIGH_QUALITY)
     if vocal:
         options |= int(Option.FORMANT_PRESERVED)
     return offline(audio, SR, options, ratio, 2 ** (semitones/12), keyframes)
@@ -98,6 +100,39 @@ def clip_timing(track, start, bars, bpm, manual=False):
     snapped = snap_start(start, local, bpm)
     return snapped, snapped+bars*240/bpm, None, 'manual' if manual else 'estimated'
 
+def read_component(folder, stem, start, frames):
+    """Recombine related stems BEFORE time stretching to retain cancellation/phase."""
+    names = {'harmony': ('bass', 'other'), 'instrumental': ('drums', 'bass', 'other')}.get(stem, (stem,))
+    if stem == 'instrumental' and (folder/'instrumental.wav').exists():
+        names = ('instrumental',)
+    result = None
+    for name in names:
+        with sf.SoundFile(folder/f'{name}.wav') as source:
+            if source.samplerate != SR or source.channels != 2:
+                raise ValueError('Stems müssen 44.1 kHz Stereo sein.')
+            source.seek(min(start, len(source)))
+            audio = source.read(frames, dtype='float32', always_2d=True)
+        if result is None:
+            result = audio
+        elif audio.shape != result.shape:
+            raise ValueError('Die Instrumentalspuren haben unterschiedliche Längen.')
+        else:
+            result += audio
+    return result
+
+
+def timing_map(anchors, ratio, context_frames, output_context, target_bpm):
+    if anchors is None:
+        return None
+    # Beat This! timestamps are quantized. Do not bend a steady performance
+    # merely to follow <=12 ms of detector jitter in an otherwise straight grid.
+    ideal = np.arange(len(anchors))*240/target_bpm
+    if np.max(np.abs(np.asarray(anchors)*ratio-ideal)) <= .012:
+        return None
+    return {context_frames+round(float(at)*SR): output_context+round(float(to)*SR)
+            for at,to in zip(anchors, ideal)}
+
+
 def source_clip(track, stem, start, bars, bpm, target_bpm, shift, cancel, manual=False, tail_seconds=0., quality='auto'):
     check_cancel(cancel)
     start, end, anchors, _ = clip_timing(track, start, bars, bpm, manual)
@@ -105,17 +140,20 @@ def source_clip(track, stem, start, bars, bpm, target_bpm, shift, cancel, manual
     ratio = (bars*240/target_bpm)/seconds
     input_tail = tail_seconds/ratio
     from .separation import stems_folder
-    with sf.SoundFile(stems_folder(track, quality) / f'{stem}.wav') as f:
-        f.seek(min(round(start*SR), len(f)))
-        audio = f.read(round((seconds+input_tail)*SR), dtype='float32', always_2d=True)
-    if len(audio) < SR/2:
+    source_start = round(start*SR)
+    context = min(source_start, round(.12*SR))
+    audio = read_component(stems_folder(track, quality), stem, source_start-context,
+                           context+round((seconds+input_tail)*SR))
+    if len(audio)-context < SR/2:
         raise ValueError(f'Der Einstieg für {track["name"]} liegt hinter dem Songende.')
-    if len(audio) < round(seconds*SR)-SR*.1:
+    if len(audio)-context < round(seconds*SR)-SR*.1:
         raise ValueError(f'Der Abschnitt ab {start:.1f} s in {track["name"]} ist zu lang. Einstieg oder Taktzahl ändern.')
-    audio = fit(audio, round((seconds+input_tail)*SR))
-    mapping = {round(float(at)*SR): round(i*240/target_bpm*SR) for i, at in enumerate(anchors)} if anchors is not None else None
-    result = stretch(audio, ratio, shift if stem != 'drums' else 0, vocal=stem=='vocals', keyframes=mapping, percussive=stem=='drums')
-    return fit(result, round(bars*240/target_bpm*SR)+round(tail_seconds*SR))
+    audio = fit(audio, context+round((seconds+input_tail)*SR))
+    output_context = round(context*ratio)
+    mapping = timing_map(anchors, ratio, context, output_context, target_bpm)
+    result = stretch(audio, ratio, shift if stem != 'drums' else 0, vocal=stem=='vocals',
+                     keyframes=mapping, percussive=stem=='drums')
+    return fit(result[output_context:], round(bars*240/target_bpm*SR)+round(tail_seconds*SR))
 
 def offset_audio(audio, beats, bpm):
     shift = round(beats*60/bpm*SR)
@@ -152,21 +190,40 @@ def active_rms(audio):
     return float(np.sqrt(np.mean(active**2))) if len(active) else 0.
 
 
+def duck_envelope(vocal):
+    """Stereo-linked level with a short attack and a musical 180 ms release."""
+    block = max(1, round(.005*SR))
+    power = np.mean(vocal.astype(np.float64)**2, axis=1)
+    padded = np.pad(power, (0, (-len(power)) % block))
+    levels = np.sqrt(padded.reshape(-1, block).mean(axis=1))
+    attack, release = np.exp(-.005/.015), np.exp(-.005/.180)
+    env = np.empty(len(levels))
+    previous = 0.
+    for i, level in enumerate(levels):
+        coefficient = attack if level > previous else release
+        previous = coefficient*previous+(1-coefficient)*level
+        env[i] = previous
+    return np.interp(np.arange(len(vocal)), np.r_[0., np.arange(len(env))*block+block/2],
+                     np.r_[0., env]).astype(np.float32)
+
+
 def mix_space(vocal, bed, vocal_gain=None):
+    # Run once across the joined song, so EQ and sidechain state survive edits.
     vocal = sosfilt(butter(2, 85, btype='highpass', fs=SR, output='sos'), vocal, axis=0).astype(np.float32)
-    level = active_rms(vocal)
     if vocal_gain is not None:
         vocal *= vocal_gain
-    elif level > .008:
-        vocal *= np.clip(.078/level, .5, 1.8)
-    envelope = sosfilt(butter(1, 7, fs=SR, output='sos'), np.sqrt(np.mean(vocal**2, axis=1)))
-    # Make space only in the vocal's midrange; preserve the bass and kick energy.
-    mid = sosfilt(butter(2, [280, 4200], btype='bandpass', fs=SR, output='sos'), bed, axis=0).astype(np.float32)
-    bed = bed - mid * (.23*np.clip(envelope/.10, 0, 1))[:, None]
+    else:
+        level = active_rms(vocal)
+        if level > .008:
+            vocal *= np.clip(.078/level, .5, 1.8)
+    envelope = duck_envelope(vocal)
+    # Zero-phase offline band extraction avoids subtracting a phase-rotated
+    # midrange from the original. The remaining low/high bands stay in place.
+    mid = sosfiltfilt(butter(2, [280, 4200], btype='bandpass', fs=SR, output='sos'), bed, axis=0).astype(np.float32)
+    bed = bed-mid*(.23*np.clip(envelope/.10, 0, 1))[:, None]
     return vocal, bed
 
-
-def join_parts(vocal_parts, bed_parts, tails, sections, continuations=None):
+def join_parts(vocal_parts, bed_parts, tails, sections, continuations=None, bed_continuations=None):
     vocals, bed = np.concatenate(vocal_parts), np.concatenate(bed_parts)
     boundary = 0
     for i in range(1, len(sections)):
@@ -174,14 +231,14 @@ def join_parts(vocal_parts, bed_parts, tails, sections, continuations=None):
         vt, bt = tails[i-1]
         # A short continuation from the actual source bridges edits, with no repeated syllable/echo.
         n = min(len(bt), round((.008 if sections[i].effect=='drop' else .025)*SR))
-        if n and sections[i-1].effect not in ('build', 'outro'):
+        if n and sections[i-1].effect not in ('build', 'outro') and not (bed_continuations and bed_continuations[i]):
             ramp = np.linspace(0, 1, n)[:, None]
             bed[boundary:boundary+n] = bt[:n]*(1-ramp)+bed[boundary:boundary+n]*ramp
         n = min(len(vt), round(.18*SR), len(vocals)-boundary)
-        if n:
+        if n and not (continuations and continuations[i]):
             incoming = vocals[boundary:boundary+n]
             # Preserve a natural release only when the incoming singer leaves space.
-            if active_rms(incoming) < .018 and not (continuations and continuations[i]):
+            if active_rms(incoming) < .018:
                 incoming += vt[:n]*np.linspace(1, 0, n)[:, None]
             else:
                 short = min(n, round(.008*SR))
@@ -219,6 +276,32 @@ def vocal_runs(sections, timing):
             runs[j] = (i, total, preceding)
             preceding += sections[j].bars
         i = end_index
+    return runs
+
+
+def backing_components(section):
+    return (('B', 'drums'), ('A', 'harmony')) if section.instrumental == 'hybrid' else ((section.instrumental, 'instrumental'),)
+
+
+def backing_runs(sections, timing):
+    """Process a continuing backing component once across arrangement sections."""
+    runs = {}
+    for i, section in enumerate(sections):
+        for source, stem in backing_components(section):
+            if (i, source, stem) in runs:
+                continue
+            _, end = timing(section, source)
+            j = i+1
+            while j < len(sections) and (source, stem) in backing_components(sections[j]):
+                begin, following_end = timing(sections[j], source)
+                if abs(begin-end) > .02:
+                    break
+                end, j = following_end, j+1
+            count = sum(s.bars for s in sections[i:j])
+            preceding = 0
+            for k in range(i, j):
+                runs[k, source, stem] = (i, count, preceding)
+                preceding += sections[k].bars
     return runs
 
 def render(request, job_id, progress, cancel):
@@ -264,27 +347,30 @@ def render(request, job_id, progress, cancel):
     if abs(pitch) > 3:
         warnings.append(f'Track B wird um {pitch:+g} Halbtöne verändert; dabei können hörbare Artefakte entstehen.')
     elapsed = 0.
-    cache = {}
-    def voice_timing(section):
-        source = section.vocal
+    def source_timing(section, source):
         begin, end, _, _ = clip_timing(tracks[source], section.start_a if source=='A' else section.start_b,
                                        section.bars, bpms[source], bool(request.bpm_a if source=='A' else request.bpm_b))
         return begin, end
-    runs = vocal_runs(sections, voice_timing)
-    voice_cache = {}
+    runs = vocal_runs(sections, lambda section: source_timing(section, section.vocal))
+    beds = backing_runs(sections, source_timing)
+    voice_cache, bed_cache = {}, {}
     for i, section in enumerate(sections):
         check_cancel(cancel)
         progress(45+int(i/len(sections)*43), f'Abschnitt {i+1}/{len(sections)}: {section.name}')
         length = round(section.bars*240/target*SR)
         tail_length = round(.18*SR)
         def clip(source, stem):
-            start = section.start_a if source == 'A' else section.start_b
-            key = (source, stem, start, section.bars)
-            if key not in cache:
-                cache[key] = source_clip(tracks[source], stem, start, section.bars, bpms[source], target,
-                                         pitch if source == 'B' else 0, cancel,
-                                         manual=bool(request.bpm_a if source=='A' else request.bpm_b), tail_seconds=.18, quality=backends[source]) * gains[source]
-            return cache[key].copy()
+            first_index, count, preceding = beds[i, source, stem]
+            first = sections[first_index]
+            start = first.start_a if source == 'A' else first.start_b
+            key = (source, stem, start, count)
+            if key not in bed_cache:
+                bed_cache[key] = source_clip(tracks[source], stem, start, count, bpms[source], target,
+                    pitch if source == 'B' else 0, cancel,
+                    manual=bool(request.bpm_a if source=='A' else request.bpm_b), tail_seconds=.18,
+                    quality=backends[source])*gains[source]
+            offset = round(preceding*240/target*SR)
+            return fit(bed_cache[key][offset:offset+length+tail_length].copy(), length+tail_length)
         if section.vocal == 'none':
             vocal = np.zeros((length+tail_length, 2), np.float32)
         else:
@@ -299,13 +385,9 @@ def render(request, job_id, progress, cancel):
                     tail_seconds=.18, quality=backends[source]) * gains[source]
             offset = round(preceding_bars*240/target*SR)
             vocal = fit(voice_cache[key][offset:offset+length+tail_length].copy(), length+tail_length)
-        if section.instrumental == 'hybrid':
-            # Single rhythm section avoids competing kick transients and bass lines.
-            bed = clip('B', 'drums') + clip('A', 'bass') + clip('A', 'other')
-        else:
-            bed = sum(clip(section.instrumental, stem) for stem in ('drums', 'bass', 'other'))
+        bed = sum(clip(source, stem) for source, stem in backing_components(section))
         vocal = offset_audio(vocal, section.vocal_offset, target)
-        vocal, bed = mix_space(vocal, bed, voice_gains.get(section.vocal, 1.))
+        vocal *= voice_gains.get(section.vocal, 1.)
         vocal *= 10**(section.vocal_db/20)
         bed *= 10**(section.instrumental_db/20)
         tails.append((vocal[length:].copy(), bed[length:].copy()))
@@ -330,14 +412,13 @@ def render(request, job_id, progress, cancel):
                        **{f'source_{name.lower()}_{field}': value for name,values in timing.items()
                           for field,value in zip(('snapped','end','bpm','grid'), values)}})
         elapsed += length/SR
-        cache.clear()
-    continuations = [False]
-    for previous, current in zip(report, report[1:]):
-        source = current['vocal'].lower()
-        same = current['vocal'] != 'none' and current['vocal'] == previous['vocal']
-        continuations.append(same and abs(current[f'source_{source}_snapped']-previous[f'source_{source}_end'])<.02)
-    vocals, instrumental = join_parts(vocal_parts, bed_parts, tails, sections, continuations)
-    del vocal_parts, bed_parts
+    continuations = [False]+[i in runs and runs[i][0] != i for i in range(1, len(sections))]
+    bed_continuations = [False]+[backing_components(sections[i-1]) == backing_components(sections[i]) and
+        all(beds[i, source, stem][0] != i for source, stem in backing_components(sections[i]))
+        for i in range(1, len(sections))]
+    vocals, instrumental = join_parts(vocal_parts, bed_parts, tails, sections, continuations, bed_continuations)
+    del vocal_parts, bed_parts, bed_cache, voice_cache
+    vocals, instrumental = mix_space(vocals, instrumental, vocal_gain=1.)
     check_cancel(cancel)
     progress(90, 'Lautheit anpassen und WAV/MP3 exportieren')
     sf.write(folder/'vocals.wav', vocals, SR, subtype='FLOAT')
@@ -357,9 +438,11 @@ def render(request, job_id, progress, cancel):
                '-ar', str(SR), '-c:a', 'pcm_s24le', str(folder/'mashup.wav')])
     run_audio(['ffmpeg', '-v', 'error', '-y', '-i', str(folder/'mashup.wav'), '-c:a', 'libmp3lame', '-b:a', '320k', str(folder/'mashup.mp3')])
     check_cancel(cancel)
-    result = {'id': job_id, 'name': ('Vorschau' if request.preview else 'Arrangement')+(' · RoFormer' if all(v=='hq' for v in backends.values()) else ' · Demucs' if all(v=='standard' for v in backends.values()) else ' · gemischte Stems'), 'duration': round(elapsed, 2),
-              'bpm': target, 'pitch_b': pitch, 'engine_version': 3, 'separation': backends, 'track_a': a['name'], 'track_b': b['name'], 'sections': report,
+    result = {'id': job_id, 'name': ('Vorschau · V4' if request.preview else 'Arrangement · V4')+(' · RoFormer' if all(v=='hq' for v in backends.values()) else ' · Demucs' if all(v=='standard' for v in backends.values()) else ' · gemischte Stems'), 'duration': round(elapsed, 2),
+              'bpm': target, 'pitch_b': pitch, 'engine_version': 4, 'separation': backends, 'track_a': a['name'], 'track_b': b['name'], 'sections': report,
               'warnings': warnings, 'request': request.model_dump(), 'mastering': {'target_lufs': -14, 'target_true_peak_db': -1.2},
+              'processing': {'backing': 'sum-before-stretch; continuous source runs', 'pitch': 'Rubber Band high quality',
+                             'mix': 'continuous EQ; zero-phase midrange duck; 180 ms release', 'grid_jitter_tolerance_ms': 12},
               'stems_note': 'Zeitlich ausgerichtete Gesangs- und Instrumentalbusse vor Mastering, 32-bit float, 44.1 kHz.'}
     save_json(folder/'arrangement.json', result)
     with zipfile.ZipFile(folder/'stems.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as archive:

@@ -33,7 +33,7 @@ def import_track(path, original_name=None, progress=lambda *args: None):
     if not 10 <= duration <= 1800:
         raise ValueError('Bitte einen Song zwischen 10 Sekunden und 30 Minuten wählen.')
     progress(8, 'Audio wird eingelesen')
-    run_audio(['ffmpeg', '-v', 'error', '-y', '-i', str(path), '-vn', '-ar', str(SR), '-ac', '2', '-c:a', 'pcm_s16le', str(folder / 'audio.wav')])
+    run_audio(['ffmpeg', '-v', 'error', '-y', '-i', str(path), '-vn', '-ar', str(SR), '-ac', '2', '-c:a', 'pcm_f32le', str(folder / 'audio.wav')])
     return analyze_track(track_id, original_name or path.stem, progress)
 
 def analyze_track(track_id, name, progress):
