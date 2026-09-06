@@ -13,14 +13,14 @@ jobs:
     name: Apple Silicon installation and tests
     runs-on: macos-15
     timeout-minutes: 25
-    env:
-      MASHUP_DATA: ${{ runner.temp }}/buckswood-data
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      - name: Configure local storage
+        run: echo "MASHUP_DATA=$RUNNER_TEMP/buckswood-data" >> "$GITHUB_ENV"
       - name: Install FFmpeg
         run: brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
       - name: Install application and build frontend
