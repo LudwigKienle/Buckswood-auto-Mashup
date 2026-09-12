@@ -80,7 +80,7 @@ def state():
 
 @app.get('/api/health')
 def health():
-    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 5}
+    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 6}
 
 @app.post('/api/upload')
 async def upload(file: UploadFile):
@@ -127,6 +127,16 @@ def start_render(request: RenderRequest):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return submit('render', lambda job_id, progress, cancel: render(request, job_id, progress, cancel))
+
+@app.post('/api/intro-plan')
+def intro_plan(request: RenderRequest):
+    from .intro import rebuild_intro
+    try:
+        tracks = {'A': read_track(request.track_a), 'B': read_track(request.track_b)}
+        return rebuild_intro(tracks, [s.model_dump() for s in request.sections],
+                             {'A': request.bpm_a, 'B': request.bpm_b})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 @app.post('/api/quality-plan')
 def quality_plan(pair: PairRequest):

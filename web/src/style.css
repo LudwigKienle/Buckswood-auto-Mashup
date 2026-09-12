@@ -10,3 +10,5 @@
 .quality-panel>label{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:14px;color:var(--muted)}
 
 .phrase-option{width:100%;border-top:1px solid var(--border);padding-top:16px}.phrase-option label{display:flex;align-items:center;gap:12px;font-size:14px}.phrase-option p{margin-top:8px}
+
+.arrangement-foot{flex-wrap:wrap}.arrangement-foot p{flex:1;min-width:220px}

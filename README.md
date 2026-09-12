@@ -51,7 +51,11 @@ The base installer installs pinned Python dependencies, checks out a fixed AutoM
 
 The mastering target is −14 LUFS integrated / −1.2 dBTP; these are targets, not a promise of perceptual quality. The float buses let you finish the mix in a DAW.
 
-## Audio processing improvements (V5)
+## Audio processing improvements (V6)
+
+V6 plans a deliberate opening connected to the first backing passage. The musical planner compares 4- and 8-bar lead-ins using their rhythm energy and build; the quick planner also connects the intro to the following section instead of independently selecting a quiet excerpt. When preceding bars are unavailable, the intro introduces the upcoming motif. **Intro neu aufbauen** updates the opening of an existing arrangement while keeping its subsequent sections.
+
+Bass and drums enter progressively during the intro. Their levels are shaped in the original stems before the combined backing is stretched, reaching full level before the first vocal. The preview now plays the actual first 32 bars, including the intro; it no longer skips directly to vocals.
 
 V5 preserves short vocal pickups and releases across bar boundaries when a sustained pause bounds the original phrase and the neighboring singer leaves space. It uses up to roughly two beats of actual source audio (capped at 1.6 seconds), keeps the bar grid and arrangement duration fixed, and skips uncertain or occupied extensions. **Auftakte und Wortenden erhalten** can be switched off for comparison. Manually offset vocal sections retain manual timing without automatic handles.
 
@@ -61,7 +65,7 @@ V4 processes a complete backing as one stereo signal and keeps continuing backin
 
 EQ and vocal-triggered backing reduction run across the assembled song, with a smooth release and phase-aligned midrange extraction. New imports retain float precision. The planner compares 8- and 16-bar candidates and penalizes prominent vocal-timbre/activity changes inside a phrase. These are heuristics, not lyric or speaker recognition. The separation models themselves have not changed.
 
-New exports are labeled **V5**. Switching results in the history keeps the playback position for comparisons. Restored pickups/releases are counted below the player and recorded in the arrangement JSON, including handles that could not fit.
+New exports are labeled **V6**. Switching results in the history keeps the playback position for comparisons. Restored pickups/releases are counted below the player and recorded in the arrangement JSON, including handles that could not fit.
 
 ## Local storage and updates
 

@@ -157,7 +157,9 @@ def auto_plan(a, b):
             candidates=close if len(close)>=2 else active
         track={**track,'candidates':[{**c,'energy':c.get(metric,c['energy'])} for c in candidates]}
         return choose_start(track,bars,energy)
-    return [{'name': n, 'bars': bars, 'vocal': v, 'instrumental': inst, 'effect': fx,
+    sections = [{'name': n, 'bars': bars, 'vocal': v, 'instrumental': inst, 'effect': fx,
              'start_a': choose(a, bars, energy, v=='A'), 'start_b': choose(b, bars, energy, v=='B'),
              'vocal_db': 0, 'instrumental_db': -1, 'vocal_offset': 0}
             for i, (n, bars, v, inst, fx, energy) in enumerate(specs)]
+    from .intro import rebuild_intro
+    return rebuild_intro({'A':a, 'B':b}, sections)['sections']

@@ -9,6 +9,7 @@ import numpy as np
 import librosa
 from .storage import TRACKS, save_json
 from .phrases import quiet_regions, phrase_boundary, HANDLE_SECONDS, handle_duration
+from .intro import choose_intro
 
 VERSION = 3
 
@@ -210,6 +211,8 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
         bb = [v for v in cb if v['index'] >= 4 and v['index']+2*count+4 <= len(profiles['B']['bars'])
               and v['index']+count in by_b and .3 <= by_b[v['index']+count]['coverage'] <= .98
               and all(r['regular'] for r in profiles['B']['bars'][v['index']-4:v['index']+2*count+4])]
+        for bed in bb:
+            bed['intro'] = choose_intro(profiles['B'], bed['index'])
         if aa and bb:
             choices.append((count, aa, bb, by_b))
     if not choices:
@@ -236,6 +239,7 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
                     value -= .14*min(overlap, 1.5)/1.5
                     value += .035*min(av['coverage'], .75)+.035*min(bv['coverage'], .75)
                     value -= .05*abs(bed['intensity']-.8)
+                    value += .08*bed['intro']['score']
                     value -= .012*abs(pitch)+.03*max(0, abs(pitch)-2)+.01*max(0, abs(pitch)-3)
                     value -= .18*(av['internal_change']+bv['internal_change'])
                     value += .025*(av['entry_change']+bv['entry_change'])
@@ -249,10 +253,11 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
     _, pitch, count, (_, av, bed, bv, forward, reverse) = ranked[0]
     half = count//2
     ai, bi = av['index'], bed['index']
+    intro = bed['intro']
     def at(source, index):
         return round(profiles[source]['bars'][index]['start'], 3)
     specs = [
-        ('Intro', 4, 'none', 'B', ai, bi-4, 'intro'),
+        ('Intro · Motiv aufbauen', intro['bars'], 'none', 'B', ai, intro['index'], 'intro'),
         ('Thema A · ganze Passage', count, 'A', 'B', ai, bi, 'normal'),
         ('Antwort B · Einstieg', half, 'B', 'B', ai, bi+count, 'normal'),
         ('Antwort B · Fortsetzung', half, 'B', 'hybrid', ai+half, bi+count+half, 'normal'),
@@ -269,7 +274,8 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
         if row[1] not in [other[1] for other in pitch_ranked]:
             pitch_ranked.append(row)
     margin = pitch_ranked[0][0]-pitch_ranked[1][0] if len(pitch_ranked)>1 else None
-    note = (f'Zwei feste Motive mit jeweils {count} fortlaufenden Takten. Beim Einstieg von B bleibt dessen '
+    note = (f'Ein {intro["bars"]}-Takt-Intro führt direkt in die erste Begleitung; Bass und Drums bauen sich auf. '
+            f'Zwei feste Motive mit jeweils {count} fortlaufenden Takten. Beim Einstieg von B bleibt dessen '
             'Begleitung erhalten; die Instrumente von A kommen später hinzu. Das erste Motiv kehrt im Drop zurück. '
             'Längere Gesangspausen, Platz für Auftakte und Wortenden sowie Tonhöhen und Klangwechsel werden geprüft. '
             'Textbedeutung, Sprecher und Akkorde werden nicht sicher erkannt.')
@@ -277,7 +283,7 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
         note += f' Tonhöhe unklar: {pitch:+d} und {pitch_ranked[1][1]:+d} Halbtöne bitte vergleichen.'
     return {'sections': sections, 'pitch_b': pitch,
             'target_bpm': target,
-            'analysis': {'version': 5, 'phrase_bars': count, 'strategy': 'continuous-themes',
+            'analysis': {'version': 6, 'phrase_bars': count, 'strategy': 'continuous-themes', 'intro': intro,
                          'bpm_a': profiles['A']['bpm'], 'bpm_b': profiles['B']['bpm'],
                          'themes': {'A': [av['start'], av['end']], 'B': [bv['start'], bv['end']]},
                          'similarity_a_over_b': forward, 'similarity_b_over_a': reverse,

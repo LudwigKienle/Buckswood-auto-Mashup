@@ -133,7 +133,7 @@ def timing_map(anchors, ratio, context_frames, output_context, target_bpm):
             for at,to in zip(anchors, ideal)}
 
 
-def source_clip(track, stem, start, bars, bpm, target_bpm, shift, cancel, manual=False, tail_seconds=0., quality='auto', head_seconds=0.):
+def source_clip(track, stem, start, bars, bpm, target_bpm, shift, cancel, manual=False, tail_seconds=0., quality='auto', head_seconds=0., intro_bars=0):
     check_cancel(cancel)
     start, end, anchors, _ = clip_timing(track, start, bars, bpm, manual)
     seconds = end-start
@@ -142,13 +142,28 @@ def source_clip(track, stem, start, bars, bpm, target_bpm, shift, cancel, manual
     from .separation import stems_folder
     source_start = round(start*SR)
     context = min(source_start, round((.12+head_seconds/ratio)*SR))
-    audio = read_component(stems_folder(track, quality), stem, source_start-context,
+    stem_folder = stems_folder(track, quality)
+    audio = read_component(stem_folder, stem, source_start-context,
                            context+round((seconds+input_tail)*SR))
     if len(audio)-context < SR/2:
         raise ValueError(f'Der Einstieg für {track["name"]} liegt hinter dem Songende.')
     if len(audio)-context < round(seconds*SR)-SR*.1:
         raise ValueError(f'Der Abschnitt ab {start:.1f} s in {track["name"]} ist zu lang. Einstieg oder Taktzahl ändern.')
     audio = fit(audio, context+round((seconds+input_tail)*SR))
+    if intro_bars and stem != 'vocals':
+        from .intro import rhythm_gain
+        intro_seconds = float(anchors[intro_bars]) if anchors is not None else seconds*intro_bars/bars
+        shaped_frames = min(len(audio), context+round(intro_seconds*SR))
+        phase = (np.arange(shaped_frames, dtype=np.float32)-context)/max(1., intro_seconds*SR)
+        # Shape the original stems, then stretch the complete signal ONCE.
+        # All gains reach unity before the first vocal; its backing is intact.
+        for component in (('drums', 'bass') if stem == 'instrumental' else ('bass',) if stem == 'harmony' else (stem,)):
+            gain = rhythm_gain(phase, component)
+            if component == stem:
+                audio[:shaped_frames] *= gain[:, None]
+            else:
+                original = fit(read_component(stem_folder, component, source_start-context, shaped_frames), shaped_frames)
+                audio[:shaped_frames] -= original*(1-gain)[:, None]
     output_context = round(context*ratio)
     mapping = timing_map(anchors, ratio, context, output_context, target_bpm)
     result = stretch(audio, ratio, shift if stem != 'drums' else 0, vocal=stem=='vocals',
@@ -169,9 +184,10 @@ def offset_audio(audio, beats, bpm):
 def shape_section(vocal, bed, effect, bpm):
     n = len(bed)
     if effect == 'intro':
-        low = sosfilt(butter(2, 1100, fs=SR, output='sos'), bed, axis=0).astype(np.float32)
+        low = sosfiltfilt(butter(2, 1500, fs=SR, output='sos'), bed, axis=0).astype(np.float32)
         ramp = np.linspace(0, 1, n, dtype=np.float32)[:, None]
-        bed = (low*(1-ramp)+bed*ramp) * (.55+.45*ramp)
+        ramp = ramp*ramp*(3-2*ramp)
+        bed = (low*(1-ramp)+bed*ramp) * (.7+.3*ramp)
     elif effect == 'build':
         high = sosfilt(butter(2, 750, btype='highpass', fs=SR, output='sos'), bed, axis=0).astype(np.float32)
         ramp = np.linspace(0, 1, n, dtype=np.float32)[:, None]**1.5
@@ -334,16 +350,8 @@ def render(request, job_id, progress, cancel):
     folder.mkdir(exist_ok=True)
     sections = request.sections
     if request.preview:
-        # Audition both vocal sources, 16 bars each, rather than an instrumental-only intro.
-        vocal_sections = [s for s in sections if s.vocal != 'none'] or sections
-        selected = []
-        remaining = 32
-        for s in vocal_sections:
-            if not remaining:
-                break
-            selected.append(s.model_copy(update={'bars': min(s.bars, remaining)}))
-            remaining -= selected[-1].bars
-        sections = selected
+        from .intro import preview_sections
+        sections = preview_sections(sections)
     vocal_parts, bed_parts, tails, heads, report = [], [], [], [], []
     from .phrases import handle_duration
     handle_seconds = handle_duration(target) if request.protect_vocal_phrases else .18
@@ -381,12 +389,17 @@ def render(request, job_id, progress, cancel):
             first_index, count, preceding = beds[i, source, stem]
             first = sections[first_index]
             start = first.start_a if source == 'A' else first.start_b
-            key = (source, stem, start, count)
+            intro_bars = 0
+            for following in sections[first_index:]:
+                if following.effect != 'intro' or intro_bars >= count:
+                    break
+                intro_bars += min(following.bars, count-intro_bars)
+            key = (source, stem, start, count, intro_bars)
             if key not in bed_cache:
                 bed_cache[key] = source_clip(tracks[source], stem, start, count, bpms[source], target,
                     pitch if source == 'B' else 0, cancel,
                     manual=bool(request.bpm_a if source=='A' else request.bpm_b), tail_seconds=.18,
-                    quality=backends[source])*gains[source]
+                    quality=backends[source], intro_bars=intro_bars)*gains[source]
             offset = round(preceding*240/target*SR)
             return fit(bed_cache[key][offset:offset+length+tail_length].copy(), length+tail_length)
         if section.vocal == 'none':
@@ -462,12 +475,13 @@ def render(request, job_id, progress, cancel):
                '-ar', str(SR), '-c:a', 'pcm_s24le', str(folder/'mashup.wav')])
     run_audio(['ffmpeg', '-v', 'error', '-y', '-i', str(folder/'mashup.wav'), '-c:a', 'libmp3lame', '-b:a', '320k', str(folder/'mashup.mp3')])
     check_cancel(cancel)
-    result = {'id': job_id, 'name': ('Vorschau · V5' if request.preview else 'Arrangement · V5')+(' · RoFormer' if all(v=='hq' for v in backends.values()) else ' · Demucs' if all(v=='standard' for v in backends.values()) else ' · gemischte Stems'), 'duration': round(elapsed, 2),
-              'bpm': target, 'pitch_b': pitch, 'engine_version': 5, 'separation': backends, 'track_a': a['name'], 'track_b': b['name'], 'sections': report,
+    result = {'id': job_id, 'name': ('Anfang · V6' if request.preview else 'Arrangement · V6')+(' · RoFormer' if all(v=='hq' for v in backends.values()) else ' · Demucs' if all(v=='standard' for v in backends.values()) else ' · gemischte Stems'), 'duration': round(elapsed, 2),
+              'bpm': target, 'pitch_b': pitch, 'engine_version': 6, 'separation': backends, 'track_a': a['name'], 'track_b': b['name'], 'sections': report,
               'warnings': warnings, 'request': request.model_dump(), 'mastering': {'target_lufs': -14, 'target_true_peak_db': -1.2},
               'processing': {'backing': 'sum-before-stretch; continuous source runs', 'pitch': 'Rubber Band high quality',
                              'mix': 'continuous EQ; zero-phase midrange duck; 180 ms release', 'grid_jitter_tolerance_ms': 12,
                              'vocal_phrase_protection': request.protect_vocal_phrases,
+                             'intro': 'source-domain bass/drum build; preview starts at arrangement beginning',
                              'vocal_handle_limit_seconds': handle_seconds, 'vocal_edits': vocal_edits},
               'stems_note': 'Zeitlich ausgerichtete Gesangs- und Instrumentalbusse vor Mastering, 32-bit float, 44.1 kHz.'}
     if not request.protect_vocal_phrases:

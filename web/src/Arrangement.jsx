@@ -1,6 +1,6 @@
 import React from 'react';
 const labels={A:'A',B:'B',none:'Keiner',hybrid:'A + B'};
-export function Arrangement({sections,setSections,onPlan,busy,bpm,setBpm,keyMatch,setKeyMatch}){
+export function Arrangement({sections,setSections,onPlan,onIntro,busy,bpm,setBpm,keyMatch,setKeyMatch}){
  const change=(i,key,value)=>setSections(sections.map((s,n)=>n===i?{...s,[key]:value}:s));
  let bar=1;
  return <section className="arrangement panel">
@@ -15,7 +15,7 @@ export function Arrangement({sections,setSections,onPlan,busy,bpm,setBpm,keyMatc
     {['a','b'].map(x=><td key={x}><input aria-label={`Start ${x.toUpperCase()} Abschnitt ${i+1}`} type="number" min="0" step="0.1" value={s['start_'+x]} onChange={e=>change(i,'start_'+x,Number(e.target.value))}/></td>)}
     <td><button className="remove" aria-label={`Abschnitt ${i+1} entfernen`} disabled={sections.length===1} onClick={()=>setSections(sections.filter((_,n)=>n!==i))}>×</button></td>
    </tr>)}</tbody></table></div>
-   <div className="arrangement-foot"><p>Die Analyse schlägt Einstiege vor. Passe Wechsel und Phrasen nach Gehör an.</p><button className="subtle" disabled={sections.length>=16} onClick={()=>setSections([...sections,{...sections.at(-1),name:'Neuer Teil',effect:'normal',bars:8}])}>+ Abschnitt</button></div>
+   <div className="arrangement-foot"><p>Baue ein Intro aus dem Motiv der folgenden Begleitung. Bass und Drums kommen schrittweise dazu.</p><button className="subtle" disabled={busy} onClick={onIntro}>Intro neu aufbauen</button><button className="subtle" disabled={sections.length>=16} onClick={()=>setSections([...sections,{...sections.at(-1),name:'Neuer Teil',effect:'normal',bars:8}])}>+ Abschnitt</button></div>
    <details className="fine"><summary>Feinabstimmung pro Abschnitt</summary><p>A + B kombiniert Drums aus B mit Bass und übrigen Instrumenten aus A. Nach der musikalischen Analyse rasten Einstiege auf erkannte Taktanfänge ein; manuelle BPM überschreiben dieses Raster.</p>{sections.map((s,i)=><div className="fine-row" key={i}><strong>{s.name}</strong><label>Gesang · dB<input aria-label={`Gesangspegel Abschnitt ${i+1}`} type="number" min="-18" max="12" value={s.vocal_db} onChange={e=>change(i,'vocal_db',Number(e.target.value))}/></label><label>Musik · dB<input type="number" min="-18" max="12" value={s.instrumental_db} onChange={e=>change(i,'instrumental_db',Number(e.target.value))}/></label><label>Gesang · Versatz in Beats<input type="number" min="-8" max="8" step="0.25" value={s.vocal_offset} onChange={e=>change(i,'vocal_offset',Number(e.target.value))}/></label><label>Verlauf<select value={s.effect} onChange={e=>change(i,'effect',e.target.value)}>{['normal','intro','build','drop','outro'].map(x=><option key={x}>{x}</option>)}</select></label></div>)}</details>
   </>}
  </section>
