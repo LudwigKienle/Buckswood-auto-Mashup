@@ -67,6 +67,8 @@ EQ and vocal-triggered backing reduction run across the assembled song, with a s
 
 New exports are labeled **V6**. Switching results in the history keeps the playback position for comparisons. Restored pickups/releases are counted below the player and recorded in the arrangement JSON, including handles that could not fit.
 
+The musical planner compares continuous 8-, 16-, 24- and 32-bar themes. Around three minutes is a soft duration preference evaluated at the chosen output tempo; harmony, vocal boundaries and structural changes keep their existing penalties. It adds no loops or filler to reach a timestamp, and can keep a shorter arrangement when longer source passages fit poorly. A 24-bar response changes backing after 8 bars, then continues for 16. The arrangement displays its estimated total duration before rendering. The preview remains limited to the actual first 32 bars.
+
 ## Local storage and updates
 
 The default data folder remains `~/Library/Application Support/Mashup Studio` for compatibility with earlier local builds. It contains `app`, `runtime`, `separation-runtime`, `tracks`, `exports`, `jobs` and model/build caches. Existing libraries do not need migrating when the product name changes.

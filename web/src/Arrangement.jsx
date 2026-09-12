@@ -1,11 +1,13 @@
 import React from 'react';
+import {timeLabel} from './api';
 const labels={A:'A',B:'B',none:'Keiner',hybrid:'A + B'};
-export function Arrangement({sections,setSections,onPlan,onIntro,busy,bpm,setBpm,keyMatch,setKeyMatch}){
+export function Arrangement({sections,setSections,onPlan,onIntro,busy,bpm,setBpm,keyMatch,setKeyMatch,resolvedBpm}){
  const change=(i,key,value)=>setSections(sections.map((s,n)=>n===i?{...s,[key]:value}:s));
  let bar=1;
  return <section className="arrangement panel">
   <div className="section-heading"><h2>Dein Arrangement</h2><div className="plan-controls"><button disabled={busy} onClick={onPlan}>✧ &nbsp; Zusammenhängend planen</button><label>Zieltempo <input aria-label="Zieltempo" type="number" min="60" max="200" placeholder="Auto" value={bpm} onChange={e=>setBpm(e.target.value)}/></label><label className="toggle-label">Tonart anpassen <input className="toggle" type="checkbox" checked={keyMatch} onChange={e=>setKeyMatch(e.target.checked)}/></label></div></div>
   {!sections.length?<div className="empty-plan">Wähle zwei Songs und lass dir einen Abschnittsplan vorschlagen.</div>:<>
+   <p className="result-note" aria-live="polite">Geplante Länge: <strong>{resolvedBpm>0?timeLabel(sections.reduce((sum,s)=>sum+s.bars,0)*240/resolvedBpm):'–'}</strong> · Beim musikalischen Planen sind etwa drei Minuten möglich, wenn die Passagen zusammenpassen.</p>
    <div className="timeline" aria-label="Arrangement in Takten">{sections.map((s,i)=>{const start=bar;bar+=s.bars;return <div key={i} className={'timeline-section color-'+(s.effect==='drop'?'drop':s.vocal)} style={{flex:s.bars}}><strong>{s.name}</strong><span>{s.bars} Takte</span><small>{start}</small></div>})}<small className="end-bar">{bar}</small></div>
    <div className="table-scroll"><table><thead><tr><th>Abschnitt</th><th>Takte</th><th>Gesang</th><th>Instrumental</th><th>Start A · Sek.</th><th>Start B · Sek.</th><th><span className="sr-only">Entfernen</span></th></tr></thead><tbody>{sections.map((s,i)=><tr key={i}>
     <td><span className={'dot dot-'+(s.effect==='drop'?'drop':s.vocal)}/><input aria-label={`Name Abschnitt ${i+1}`} className="name-input" value={s.name} maxLength="60" onChange={e=>change(i,'name',e.target.value)}/></td>

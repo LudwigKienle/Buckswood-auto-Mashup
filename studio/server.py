@@ -151,8 +151,8 @@ def quality_plan(pair: PairRequest):
             current = []
             for i, track in enumerate((a,b)):
                 current.append(separate_hq(track, lambda p,m: progress(round(i*35+p*.35),m), cancel))
-            return plan(*current, lambda p,m: progress(round(70+p*.3),m), cancel)
-        return plan(a, b, progress, cancel)
+            return plan(*current, lambda p,m: progress(round(70+p*.3),m), cancel, target_bpm=pair.target_bpm)
+        return plan(a, b, progress, cancel, target_bpm=pair.target_bpm)
     return submit('plan', work)
 
 @app.post('/api/separate-hq')

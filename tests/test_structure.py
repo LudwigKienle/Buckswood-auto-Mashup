@@ -16,7 +16,7 @@ def test_shorter_themes_avoid_crossing_strong_structure_change():
     assert result['analysis']['phrase_bars'] == 8
     assert result['analysis']['internal_structure_change'] == {'A':0., 'B':0.}
     stable = coherent_plan({'A':fixture(), 'B':fixture()}, fixed_pitch=0)
-    assert stable['analysis']['phrase_bars'] == 16
+    assert stable['analysis']['phrase_bars'] == 24
 
 
 def test_sustained_timbre_change_is_found_without_marking_every_bar():

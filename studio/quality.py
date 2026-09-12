@@ -184,24 +184,24 @@ def compatibility(voice, harmony, active, voice_shift=0, harmony_shift=0):
     return float(.75*np.mean(matches)+.25*np.quantile(matches, .2))
 
 
-def plan(a, b, progress, cancel, fixed_pitch=None):
+def plan(a, b, progress, cancel, fixed_pitch=None, target_bpm=None):
     from .engine import check_cancel
     profiles = {name: profile(track, progress, cancel) for name, track in [('A', a), ('B', b)]}
-    result = coherent_plan(profiles, fixed_pitch, lambda: check_cancel(cancel))
+    result = coherent_plan(profiles, fixed_pitch, lambda: check_cancel(cancel), target_bpm)
     progress(100, 'Zusammenhängendes Arrangement fertig')
     return result
 
 
-def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
+def coherent_plan(profiles, fixed_pitch=None, check=lambda: None, target_bpm=None):
     """One pair of themes, consecutive phrases, then an exact thematic return.
 
-    B's backing runs through the singer handover. Only half a theme later does
-    A's harmony enter under the continuing B phrase. Lyrics are not interpreted.
+    B's backing runs through the singer handover. A's harmony enters later on
+    a 4-, 8- or 16-bar boundary during B's phrase. Lyrics are not interpreted.
     """
     choices = []
-    target = round(math.sqrt(profiles['A']['bpm']*profiles['B']['bpm']))
-    for count in (16, 8):
-        half = count//2
+    suggested = round(math.sqrt(profiles['A']['bpm']*profiles['B']['bpm']))
+    target = target_bpm or suggested
+    for count in (32, 24, 16, 8):
         ca = candidates(profiles['A'], count, handle_duration(target)*target/profiles['A']['bpm'])
         cb = candidates(profiles['B'], count, handle_duration(target)*target/profiles['B']['bpm'])
         by_b = {v['index']: v for v in cb}
@@ -220,7 +220,9 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
     ranked = []
     shifts = range(-5, 6) if fixed_pitch is None else [int(fixed_pitch)]
     for count, aa, bb, by_b in choices:
-        half = count//2
+        # A 24-bar theme is grouped as 8 + 16, keeping the backing handover
+        # on an 8-bar boundary instead of switching after an arbitrary 12.
+        handover = 8 if count == 24 else count//2
         for pitch in shifts:
             check()
             best = None
@@ -228,8 +230,8 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
                 for bed in bb:
                     bv = by_b[bed['index']+count]
                     forward = compatibility(av['voice'], bed['harmony'], av['active'], harmony_shift=pitch)
-                    reverse = compatibility(bv['voice'][half*8:], av['harmony'][half*8:],
-                                            bv['active'][half*8:], voice_shift=pitch)
+                    reverse = compatibility(bv['voice'][handover*8:], av['harmony'][handover*8:],
+                                            bv['active'][handover*8:], voice_shift=pitch)
                     match = .65*forward+.35*reverse
                     value = match-.12*abs(forward-reverse)-.18*av['cut']-.18*bv['cut']
                     value -= .16*(av['phrase_risk']+bv['phrase_risk'])
@@ -243,15 +245,18 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
                     value -= .012*abs(pitch)+.03*max(0, abs(pitch)-2)+.01*max(0, abs(pitch)-3)
                     value -= .18*(av['internal_change']+bv['internal_change'])
                     value += .025*(av['entry_change']+bv['entry_change'])
-                    # Prefer 16-bar themes, but allow 8 when a long candidate
-                    # crosses a pronounced timbre/activity change or poor harmony.
-                    value += .04 if count == 16 else 0.
+                    # Complete longer passages may carry a full song. Duration
+                    # is only a small preference; harmony and phrase risks retain
+                    # their existing weights. Never loop or pad to hit a target.
+                    value += .04 if count >= 16 else 0.
+                    duration = (bed['intro']['bars']+3*count+8)*240/target
+                    value += .06*max(0., 1-abs(duration-180)/120)
                     if best is None or value > best[0]:
                         best = value, av, bed, bv, forward, reverse
             ranked.append((best[0], pitch, count, best))
     ranked.sort(key=lambda row: (row[0], -abs(row[1]), row[2]), reverse=True)
     _, pitch, count, (_, av, bed, bv, forward, reverse) = ranked[0]
-    half = count//2
+    handover = 8 if count == 24 else count//2
     ai, bi = av['index'], bed['index']
     intro = bed['intro']
     def at(source, index):
@@ -259,8 +264,8 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
     specs = [
         ('Intro · Motiv aufbauen', intro['bars'], 'none', 'B', ai, intro['index'], 'intro'),
         ('Thema A · ganze Passage', count, 'A', 'B', ai, bi, 'normal'),
-        ('Antwort B · Einstieg', half, 'B', 'B', ai, bi+count, 'normal'),
-        ('Antwort B · Fortsetzung', half, 'B', 'hybrid', ai+half, bi+count+half, 'normal'),
+        ('Antwort B · Einstieg', handover, 'B', 'B', ai, bi+count, 'normal'),
+        ('Antwort B · Fortsetzung', count-handover, 'B', 'hybrid', ai+handover, bi+count+handover, 'normal'),
         ('Build · Luft vor dem Drop', 4, 'none', 'hybrid', ai+count, bi+2*count, 'build'),
         ('Drop · Thema A kehrt zurück', count, 'A', 'B', ai, bi, 'drop'),
         ('Outro', 4, 'none', 'B', ai, bi+count, 'outro'),
@@ -274,7 +279,10 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
         if row[1] not in [other[1] for other in pitch_ranked]:
             pitch_ranked.append(row)
     margin = pitch_ranked[0][0]-pitch_ranked[1][0] if len(pitch_ranked)>1 else None
-    note = (f'Ein {intro["bars"]}-Takt-Intro führt direkt in die erste Begleitung; Bass und Drums bauen sich auf. '
+    duration = sum(s['bars'] for s in sections)*240/target
+    note = (f'Geplant sind etwa {round(duration)//60}:{round(duration)%60:02d} Minuten bei {target:g} BPM. '
+            'Die Länge folgt den passenden Passagen; ungefähr drei Minuten sind eine Orientierung. '
+            f'Ein {intro["bars"]}-Takt-Intro führt direkt in die erste Begleitung; Bass und Drums bauen sich auf. '
             f'Zwei feste Motive mit jeweils {count} fortlaufenden Takten. Beim Einstieg von B bleibt dessen '
             'Begleitung erhalten; die Instrumente von A kommen später hinzu. Das erste Motiv kehrt im Drop zurück. '
             'Längere Gesangspausen, Platz für Auftakte und Wortenden sowie Tonhöhen und Klangwechsel werden geprüft. '
@@ -282,8 +290,9 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None):
     if margin is not None and margin < .015:
         note += f' Tonhöhe unklar: {pitch:+d} und {pitch_ranked[1][1]:+d} Halbtöne bitte vergleichen.'
     return {'sections': sections, 'pitch_b': pitch,
-            'target_bpm': target,
+            'target_bpm': suggested,
             'analysis': {'version': 6, 'phrase_bars': count, 'strategy': 'continuous-themes', 'intro': intro,
+                         'duration_seconds': round(duration, 2), 'planning_bpm': target, 'duration_policy': 'adaptive-3min',
                          'bpm_a': profiles['A']['bpm'], 'bpm_b': profiles['B']['bpm'],
                          'themes': {'A': [av['start'], av['end']], 'B': [bv['start'], bv['end']]},
                          'similarity_a_over_b': forward, 'similarity_b_over_a': reverse,

@@ -29,5 +29,7 @@ class RenderRequest(BaseModel):
     sections: list[Section] = Field(min_length=1, max_length=16)
 
 class PairRequest(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
     track_a: str
     track_b: str
+    target_bpm: float | None = Field(default=None, ge=60, le=200)

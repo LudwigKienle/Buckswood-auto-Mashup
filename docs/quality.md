@@ -12,6 +12,8 @@ The architecture follows [Mel-Band RoFormer](https://arxiv.org/abs/2310.01809) t
 
 ## Arrangement continuity
 
+The musical planner compares continuous 8-, 16-, 24- and 32-bar themes. Around three minutes is a soft duration preference evaluated at the chosen output tempo; harmony, vocal boundaries and structural changes keep their existing penalties. It adds no loops or filler to reach a timestamp, and can keep a shorter arrangement when longer source passages fit poorly. A 24-bar response changes backing after 8 bars, then continues for 16. The arrangement displays its estimated total duration before rendering. The preview remains limited to the actual first 32 bars.
+
 V6 treats the opening as part of the arrangement. It favors a connected 4- or 8-bar lead-in to the first backing passage and compares the available lead-ins for moderate initial rhythm energy, build and large internal energy jumps. The source may be later in a song: the aim is to introduce the chosen motif, not simply concatenate both originals from zero. If no preceding bars fit, a shorter instrumental preview of the coming motif is used. Rebuilding an intro preserves the subsequent sections and honors explicit source-BPM overrides.
 
 During an intro, bass and drums begin at reduced levels and rise smoothly to unity before the next section. This is applied to the original stems before one combined time/pitch pass, keeping the following backing intact. A zero-phase low-pass blend opens the upper spectrum. This is a production heuristic, not a guarantee of a compelling composition or artifact-free stem separation. The first-32-bar preview now retains the actual opening and arrangement order.

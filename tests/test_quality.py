@@ -82,7 +82,8 @@ def test_theme_plan_keeps_voice_continuation_and_backing_at_handover():
              'activity':[1,1,1,1,0,0,0,0], 'energy':.1} for i in range(80)]}
     result=coherent_plan({'A':fixture(),'B':fixture()})
     intro,a,b1,b2,build,drop,outro=result['sections']
-    assert a['bars']==16
+    assert a['bars']==24
+    assert b1['bars']==8 and b2['bars']==16
     assert b1['vocal']==b2['vocal']=='B'
     assert b2['start_b']==b1['start_b']+b1['bars']*2
     assert a['instrumental']==b1['instrumental']=='B'
