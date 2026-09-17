@@ -23,7 +23,7 @@ class RenderRequest(BaseModel):
     bpm_b: float | None = Field(default=None, ge=40, le=240)
     key_match: bool = True
     pitch_b: float | None = Field(default=None, ge=-6, le=6)
-    separation_quality: Literal['auto', 'standard', 'hq'] = 'auto'
+    separation_quality: Literal['auto', 'standard', 'hq', 'lalal'] = 'auto'
     protect_vocal_phrases: bool = True
     preview: bool = False
     sections: list[Section] = Field(min_length=1, max_length=16)
@@ -34,3 +34,12 @@ class PairRequest(BaseModel):
     track_b: str
     target_bpm: float | None = Field(default=None, ge=60, le=200)
     use_score: bool = True
+
+    separation_quality: Literal['auto', 'standard', 'hq', 'lalal'] = 'auto'
+
+class LalalKeyRequest(BaseModel):
+    api_key: str = Field(min_length=1, max_length=1024, repr=False)
+
+class LalalStartRequest(BaseModel):
+    quote_id: str
+    consent: Literal[True]

@@ -12,7 +12,7 @@ Turn two songs into an editable arrangement with alternating vocals and backing 
 - Aligns tempo and pitch with Rubber Band, preserving vocal formants and using observed bar boundaries when available.
 - Lets you edit source positions, vocal/instrumental choices, section lengths, builds, drops, levels and timing.
 - Exports 24-bit WAV, 320 kbit/s MP3 and separate vocal/instrumental buses as 32-bit float WAV in a ZIP, before mastering.
-- Processes audio on your Mac. Initial installation and first use download dependencies and public model weights.
+- Processes audio on your Mac by default; optional paid LALAL.AI separation uploads explicitly confirmed songs. Initial installation and first use download dependencies and public model weights.
 
 **Early experimental release.** Automatic plans still need listening and editing: separation can leave artifacts, key estimates can be wrong, and the planner does not understand lyrics or guarantee matching chord progressions. The current interface is in German. See [quality methods and limitations](docs/quality.md).
 
@@ -129,3 +129,20 @@ The installer downloads pinned official [SheetSage2](https://huggingface.co/m-a-
 The **model weights are CC BY-NC 4.0**, separately from this repository's GPL code. They are not bundled in this repository; see the linked model cards for their terms. YuE2 audio generation is not enabled by this integration.
 
 SheetSage2 supplies estimated chords, vocal melody and section boundaries. The planner cross-checks predicted pitches against the separated audio, blends supported predictions conservatively, and uses sustained section changes as soft arrangement costs. Original vocals, stems and the observed Beat This! timing remain the source of the rendered audio. These are fallible estimates, not lyric understanding or a guarantee of better-sounding results. See [quality methods](docs/quality.md).
+
+## Optional paid LALAL.AI separation
+
+LALAL.AI is an optional external provider, not included in the app. Bring your own API-enabled account and processing minutes. See the [official API](https://www.lalal.ai/api/), [v1 specification](https://www.lalal.ai/api/v1/openapi.json) and [current pricing](https://www.lalal.ai/pricing/). No subscription or credits are purchased by this app.
+
+1. Open **LALAL.AI · Optional · kostenpflichtig**, expand **API-Key verbinden**, and save your API key. This checks the balance without uploading audio.
+2. Select your two songs and click **Songs & Minuten prüfen**. The confirmation lists exact song names, estimated new processing minutes, cached results and resumable tasks. Selecting the same song twice only processes it once.
+3. Click **Upload & kostenpflichtige Trennung starten** to authorize those uploads and one vocal separation per song. LALAL.AI supplies lossless vocals and instrumental; Demucs splits drums and bass locally and the remaining instrumental is reconstructed by subtraction. No paid multi-stem or dereverb requests are made.
+4. After completion, **LALAL.AI · gespeicherte Stems** is selected for the mix. Musical planning uses the selected stems too. Listen to **Gesang · LALAL.AI** in each track's solo menu and compare with local separation. Rendering and replanning use the saved files without new API charges. **Lokale Stems · automatisch** always remains local.
+
+The key is stored outside the repository at `credentials/lalal.key` under the app's data folder, with file permissions 0600; it is never returned by the state API or stored in browser storage. A server-side `LALAL_API_KEY` environment variable is also supported; a saved key takes precedence. Removing the saved key does not remove an environment variable. The default TLS certificate validation remains enabled.
+
+Quotes expire after ten minutes. A repeated start with the same quote returns the same job. The app saves remote task IDs before polling so interrupted downloads and local processing can resume without another paid split. It persists an idempotency key before the paid request. If that request's outcome is uncertain, it blocks automatic resubmission: check the task in your LALAL.AI account rather than deleting the pending state and blindly retrying. Failed, cancelled or expired remote tasks also require checking with the provider; this first integration does not automatically buy a replacement attempt. The API documents a 24-hour task lookup window.
+
+Cancellation requests remote cancellation where a task ID is known; it cannot guarantee a refund or immediate termination of an in-flight upload. Successfully downloaded, validated and locally completed stems are retained. The app requests deletion of that source's cloud files after completion; the provider notes that CDN links can remain available for one hour. Failed/interrupted uploads otherwise follow the provider's retention period. A failed cloud deletion is recorded as `lalal_cleanup_warning` in the track metadata. Original audio and local separation versions are preserved.
+
+Tests mock the API and use synthetic audio; no live paid request is part of the test suite. Actual account eligibility, billing, network availability and audible quality require a real provider run. LALAL.AI quality is not guaranteed to outperform RoFormer on every song.

@@ -25,13 +25,20 @@ def installed():
 
 
 def selected_backend(track, quality='auto'):
+    if quality == 'lalal':
+        from .lalal import ready as lalal_ready
+        if not lalal_ready(track):
+            raise ValueError('Bitte zuerst LALAL.AI-Stems für beide Songs erstellen.')
+        return 'lalal'
     if quality == 'hq' and not ready(track):
         raise ValueError('Bitte zuerst die neue Vocal-Trennung für beide Songs erstellen.')
     return 'hq' if quality != 'standard' and ready(track) else 'standard'
 
 
 def stems_folder(track, quality='auto'):
-    return TRACKS/track['id']/(HQ_FOLDER if selected_backend(track, quality)=='hq' else 'stems')
+    backend = selected_backend(track, quality)
+    from .lalal import FOLDER
+    return TRACKS/track['id']/({'hq':HQ_FOLDER, 'lalal':FOLDER}.get(backend, 'stems'))
 
 
 def run_worker(command, logpath, cancel, progress, lower, upper, label):
@@ -76,28 +83,12 @@ def separate_hq(track, progress, cancel):
                    folder/'roformer.log', cancel, progress, 2, 65, 'RoFormer')
         check_cancel(cancel)
         progress(67, f'Bereinigte Begleitung in Drums, Bass und Instrumente aufteilen · {track["name"]}')
-        run_worker([sys.executable, '-m', 'demucs', '-n', 'htdemucs', '-d', 'cpu',
-                    '--shifts', '1', '--overlap', '.5', '--float32', '-j', '1',
-                    '-o', str(stage/'rhythm'), str(stage/'instrumental.wav')],
-                   folder/'hq-rhythm.log', cancel, progress, 67, 95, 'Instrumente')
-        check_cancel(cancel)
-        rhythm = stage/'rhythm/htdemucs/instrumental'
-        instrumental, sr = sf.read(stage/'instrumental.wav', dtype='float32', always_2d=True)
-        drums, _ = sf.read(rhythm/'drums.wav', dtype='float32', always_2d=True)
-        bass, _ = sf.read(rhythm/'bass.wav', dtype='float32', always_2d=True)
-        if drums.shape != instrumental.shape or bass.shape != instrumental.shape:
-            raise ValueError('Instrumentalspuren haben unterschiedliche Längen.')
-        other = instrumental-drums-bass
-        for name, audio in [('drums', drums), ('bass', bass), ('other', other)]:
-            if not np.isfinite(audio).all():
-                raise ValueError('Ungültige Werte in der Trennung.')
-            sf.write(stage/f'{name}.wav', audio, sr, subtype='FLOAT')
+        split_instrumental(stage, folder/'hq-rhythm.log', cancel, progress)
         metadata = json.loads((stage/'separation.json').read_text())
         metadata.update(version=1, stage2='htdemucs: instrumental residual; overlap=0.5',
                         consistency='other = instrumental - drums - bass',
                         source_id=track['id'])
         save_json(stage/'separation.json', metadata)
-        shutil.rmtree(stage/'rhythm')
         target = folder/HQ_FOLDER
         stage.replace(target)
         current = read_track(track['id'])
@@ -108,3 +99,24 @@ def separate_hq(track, progress, cancel):
     finally:
         if stage.exists():
             shutil.rmtree(stage)
+
+
+def split_instrumental(stage, logpath, cancel, progress):
+    from .engine import check_cancel
+    run_worker([sys.executable, '-m', 'demucs', '-n', 'htdemucs', '-d', 'cpu',
+                '--shifts', '1', '--overlap', '.5', '--float32', '-j', '1',
+                '-o', str(stage/'rhythm'), str(stage/'instrumental.wav')],
+               logpath, cancel, progress, 67, 95, 'Instrumente')
+    check_cancel(cancel)
+    rhythm = stage/'rhythm/htdemucs/instrumental'
+    instrumental, sr = sf.read(stage/'instrumental.wav', dtype='float32', always_2d=True)
+    drums, _ = sf.read(rhythm/'drums.wav', dtype='float32', always_2d=True)
+    bass, _ = sf.read(rhythm/'bass.wav', dtype='float32', always_2d=True)
+    if drums.shape != instrumental.shape or bass.shape != instrumental.shape:
+        raise ValueError('Instrumentalspuren haben unterschiedliche Längen.')
+    other = instrumental-drums-bass
+    for name, audio in [('drums', drums), ('bass', bass), ('other', other)]:
+        if not np.isfinite(audio).all():
+            raise ValueError('Ungültige Werte in der Trennung.')
+        sf.write(stage/f'{name}.wav', audio, sr, subtype='FLOAT')
+    shutil.rmtree(stage/'rhythm')

@@ -12,3 +12,5 @@
 .phrase-option{width:100%;border-top:1px solid var(--border);padding-top:16px}.phrase-option label{display:flex;align-items:center;gap:12px;font-size:14px}.phrase-option p{margin-top:8px}
 
 .arrangement-foot{flex-wrap:wrap}.arrangement-foot p{flex:1;min-width:220px}
+
+.lalal-panel{margin:24px 0;padding:24px}.lalal-panel p{line-height:1.6}.paid-badge{font-size:12px;font-weight:500;border:1px solid currentColor;border-radius:20px;padding:5px 9px;vertical-align:middle}.lalal-controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:16px}.lalal-controls label{display:flex;flex-direction:column;gap:6px}.lalal-confirm{border:1px solid #787b88;border-radius:12px;padding:20px;margin-top:20px}.lalal-confirm button{margin:8px 12px 0 0}.lalal-confirm li{margin-bottom:10px}

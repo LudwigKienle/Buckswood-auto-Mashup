@@ -104,7 +104,7 @@ def test_invalid_model_output_cannot_be_published(change):
 def test_planner_falls_back_when_model_fails_but_propagates_cancellation(monkeypatch):
     from studio import quality
     from studio.engine import Cancelled
-    monkeypatch.setattr(quality, 'profile', lambda *args: profile())
+    monkeypatch.setattr(quality, 'profile', lambda *args, **kwargs: profile())
     monkeypatch.setattr(quality, 'coherent_plan', lambda *args: {'analysis': {'note': ''}})
     monkeypatch.setattr(score, 'ensure', lambda *args: (_ for _ in ()).throw(RuntimeError('unavailable')))
     result = quality.plan({}, {}, lambda *a: None, threading.Event(), use_score=True)
@@ -115,7 +115,7 @@ def test_planner_falls_back_when_model_fails_but_propagates_cancellation(monkeyp
 
 def test_disabling_scores_does_not_start_model(monkeypatch):
     from studio import quality
-    monkeypatch.setattr(quality, 'profile', lambda *args: profile())
+    monkeypatch.setattr(quality, 'profile', lambda *args, **kwargs: profile())
     monkeypatch.setattr(quality, 'coherent_plan', lambda *args: {'analysis': {'note': ''}})
     monkeypatch.setattr(score, 'ensure', lambda *args: pytest.fail('Model should not run'))
     assert quality.plan({}, {}, lambda *a: None, threading.Event(), use_score=False)['analysis']['score_requested'] is False
@@ -155,4 +155,4 @@ def test_api_forwards_score_choice_and_target_tempo(monkeypatch):
     response = client.post('/api/quality-plan', json={'track_a':'A', 'track_b':'B', 'target_bpm': 99, 'use_score': False},
                            headers={'x-studio-token': token})
     assert response.status_code == 200
-    assert response.json() == {'target_bpm': 99., 'use_score': False}
+    assert response.json() == {'target_bpm': 99., 'use_score': False, 'separation_quality': 'auto'}

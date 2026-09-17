@@ -44,11 +44,11 @@ def boundary_cost(envelope, times, at, reference):
     return float(np.clip(min(np.mean(before), np.mean(after)) / max(reference, 1e-6), 0, 1))
 
 
-def profile(track, progress, cancel):
+def profile(track, progress, cancel, separation_quality='auto'):
     from .engine import separate, check_cancel
     path = TRACKS / track['id'] / 'musical-profile-v3.json'
     from .separation import selected_backend
-    backend = selected_backend(track, 'auto')
+    backend = selected_backend(track, separation_quality)
     if path.exists():
         value = json.loads(path.read_text())
         if value.get('version') == VERSION and value.get('separation', 'standard') == backend:
@@ -60,7 +60,7 @@ def profile(track, progress, cancel):
     progress(35, f'Gesangspausen und Tonhöhen vergleichen: {track["name"]}')
     sr, hop = 22050, 512
     from .separation import stems_folder
-    folder = stems_folder(track, 'auto')
+    folder = stems_folder(track, separation_quality)
     voice, _ = librosa.load(folder / 'vocals.wav', sr=sr)
     other, _ = librosa.load(folder / 'other.wav', sr=sr)
     bass, _ = librosa.load(folder / 'bass.wav', sr=sr)
@@ -188,7 +188,7 @@ def compatibility(voice, harmony, active, voice_shift=0, harmony_shift=0):
     return float(.75*np.mean(matches)+.25*np.quantile(matches, .2))
 
 
-def plan(a, b, progress, cancel, fixed_pitch=None, target_bpm=None, use_score=False):
+def plan(a, b, progress, cancel, fixed_pitch=None, target_bpm=None, use_score=False, separation_quality='auto'):
     from .engine import check_cancel, Cancelled
     from . import score
     scores, warnings = {}, []
@@ -205,7 +205,7 @@ def plan(a, b, progress, cancel, fixed_pitch=None, target_bpm=None, use_score=Fa
     lower = 70 if use_score else 0
     span = (95-lower)/2
     for i, (name, track) in enumerate([('A', a), ('B', b)]):
-        profiles[name] = profile(track, lambda p, m: progress(round(lower+i*span+p*span/100), m), cancel)
+        profiles[name] = profile(track, lambda p, m: progress(round(lower+i*span+p*span/100), m), cancel, separation_quality=separation_quality)
     progress(96, 'Passende zusammenhängende Themen vergleichen')
     profiles = {name: score.enrich(value, scores.get(name)) for name, value in profiles.items()}
     result = coherent_plan(profiles, fixed_pitch, lambda: check_cancel(cancel), target_bpm)

@@ -4,6 +4,7 @@ import secrets
 import tempfile
 import threading
 import uuid
+import time
 from typing import Literal
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -12,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .storage import ROOT, DATA, TRACKS, EXPORTS, JOBS, list_tracks, read_track, save_json
-from .models import RenderRequest, PairRequest
+from .models import RenderRequest, PairRequest, LalalKeyRequest, LalalStartRequest
 
 app = FastAPI(title='Buckswood auto Mashup', version='0.1.0')
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
@@ -76,8 +77,8 @@ def submit(kind, work):
 def state():
     exports = [json.loads(p.read_text()) for p in sorted(EXPORTS.glob('*/arrangement.json'), key=lambda p: p.stat().st_mtime, reverse=True)]
     defaults=json.loads((DATA/'project.json').read_text()) if (DATA/'project.json').exists() else {}
-    from . import score
-    return {'score_installed': score.installed(), 'score_ready': [t['id'] for t in list_tracks() if score.cached(t)], 'token': token, 'tracks': list_tracks(), 'exports': exports, 'jobs': list(jobs.values()), 'data_dir': str(DATA), 'defaults':defaults, 'hq_installed': __import__('studio.separation', fromlist=['installed']).installed()}
+    from . import score, lalal
+    return {'lalal_configured': lalal.configured(), 'lalal_ready': [t['id'] for t in list_tracks() if lalal.ready(t)], 'score_installed': score.installed(), 'score_ready': [t['id'] for t in list_tracks() if score.cached(t)], 'token': token, 'tracks': list_tracks(), 'exports': exports, 'jobs': list(jobs.values()), 'data_dir': str(DATA), 'defaults':defaults, 'hq_installed': __import__('studio.separation', fromlist=['installed']).installed()}
 
 @app.get('/api/health')
 def health():
@@ -148,12 +149,12 @@ def quality_plan(pair: PairRequest):
         raise HTTPException(400, str(exc))
     def work(job_id, progress, cancel):
         from .separation import installed, separate_hq
-        if installed():
+        if pair.separation_quality in ('auto', 'hq') and installed():
             current = []
             for i, track in enumerate((a,b)):
                 current.append(separate_hq(track, lambda p,m: progress(round(i*20+p*.2),m), cancel))
-            return plan(*current, lambda p,m: progress(round(40+p*.6),m), cancel, target_bpm=pair.target_bpm, use_score=pair.use_score)
-        return plan(a, b, progress, cancel, target_bpm=pair.target_bpm, use_score=pair.use_score)
+            return plan(*current, lambda p,m: progress(round(40+p*.6),m), cancel, target_bpm=pair.target_bpm, use_score=pair.use_score, separation_quality=pair.separation_quality)
+        return plan(a, b, progress, cancel, target_bpm=pair.target_bpm, use_score=pair.use_score, separation_quality=pair.separation_quality)
     return submit('plan', work)
 
 @app.post('/api/separate-hq')
@@ -169,6 +170,69 @@ def separate_pair(pair: PairRequest):
             result.append(separate_hq(track, lambda p,m: progress(round((i*100+p)/len(tracks)), m), cancel))
         return {'tracks': result}
     return submit('separation', work)
+
+# A quote binds consent to exact source fingerprints and expires in ten minutes.
+# Consumed quotes return the same job on duplicate HTTP requests.
+lalal_quotes = {}
+
+@app.post('/api/lalal/key')
+def lalal_key(request: LalalKeyRequest):
+    from . import lalal
+    try:
+        return {'configured': True, 'minutes_left': lalal.store_key(request.api_key)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+@app.post('/api/lalal/disconnect')
+def lalal_disconnect():
+    from . import lalal
+    lalal.KEY_FILE.unlink(missing_ok=True)
+    return {'configured': lalal.configured()}
+
+@app.post('/api/lalal/quote')
+def lalal_quote(pair: PairRequest):
+    from . import lalal
+    try:
+        tracks = [read_track(t) for t in dict.fromkeys((pair.track_a, pair.track_b))]
+        estimate = lalal.estimate(tracks)
+        estimate['minutes_left'] = lalal.Client().minutes()
+        estimate['can_start'] = estimate['minutes_left'] >= estimate['estimated_minutes']
+        quote_id = secrets.token_urlsafe(24)
+        with lock:
+            for old in list(lalal_quotes):
+                if lalal_quotes[old]['expires'] < time.monotonic():
+                    del lalal_quotes[old]
+            lalal_quotes[quote_id] = {'tracks': tracks, 'sources': [lalal.fingerprint(t) for t in tracks],
+                                     'expires': time.monotonic()+600, 'job_id': None}
+        return {**estimate, 'quote_id': quote_id}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+@app.post('/api/lalal/separate')
+def lalal_separate(request: LalalStartRequest):
+    from . import lalal
+    with lock:
+        quote = lalal_quotes.get(request.quote_id)
+        if not quote or quote['expires'] < time.monotonic():
+            raise HTTPException(400, 'Bitte die LALAL.AI-Minuten neu prüfen.')
+        if quote['job_id']:
+            return dict(jobs[quote['job_id']])
+        if any(j['status'] in ('queued', 'running') for j in jobs.values()):
+            raise HTTPException(409, 'Bitte den laufenden Auftrag zuerst beenden.')
+        tracks = quote['tracks']
+        if quote['sources'] != [lalal.fingerprint(t) for t in tracks]:
+            raise HTTPException(409, 'Songs wurden geändert. Bitte die Minuten neu prüfen.')
+        def work(job_id, progress, cancel):
+            needed = lalal.estimate(tracks)['estimated_minutes']
+            if needed and lalal.Client().minutes() < needed:
+                raise ValueError('Das LALAL.AI-Guthaben reicht für diese Songs nicht aus. Es wurde nichts hochgeladen.')
+            result = []
+            for i, track in enumerate(tracks):
+                result.append(lalal.separate(track, lambda p,m: progress(round((i*100+p)/len(tracks)),m), cancel))
+            return {'tracks': result, 'provider': 'lalal'}
+        job = submit('separation-lalal', work)
+        quote['job_id'] = job['id']
+        return job
 
 @app.get('/api/jobs/{job_id}')
 def job(job_id: str):
@@ -193,7 +257,7 @@ def track_audio(track_id: str):
     return FileResponse(TRACKS/track_id/'audio.wav', media_type='audio/wav')
 
 @app.get('/api/tracks/{track_id}/stems/{stem}')
-def stem_audio(track_id: str, stem: str, quality: Literal["auto", "standard", "hq"] = "auto"):
+def stem_audio(track_id: str, stem: str, quality: Literal["auto", "standard", "hq", "lalal"] = "auto"):
     try:
         read_track(track_id)
     except ValueError:

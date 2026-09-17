@@ -1,0 +1,21 @@
+import React,{useState,useEffect} from 'react';
+import {api} from './api';
+
+export function LalalPanel({a,b,busy,configured,ready,onRefresh,onJob,onError,onWorking}){
+ const[key,setKey]=useState(''),[working,setWorking]=useState(false),[quote,setQuote]=useState(null),[message,setMessage]=useState('');
+ useEffect(()=>{setQuote(null);setMessage('')},[a,b]);
+ const disabled=busy||working;
+ async function run(action){setWorking(true);onWorking(true);onError('');try{await action()}catch(e){onError(e.message)}finally{setWorking(false);onWorking(false)}}
+ async function connect(){await run(async()=>{const result=await api('/lalal/key',{api_key:key});setKey('');setMessage(`Verbunden · ${result.minutes_left.toFixed(2)} Minuten verfügbar`);setQuote(null);await onRefresh()})}
+ async function check(){await run(async()=>{setQuote(await api('/lalal/quote',{track_a:a,track_b:b}))})}
+ async function start(){await run(async()=>{onJob(await api('/lalal/separate',{quote_id:quote.quote_id,consent:true}));setQuote(null)})}
+ return <section className="panel lalal-panel" aria-label="LALAL.AI kostenpflichtige Option"><h2>LALAL.AI <span className="paid-badge">Optional · kostenpflichtig</span></h2>
+ <p>Gesang und Begleitung über LALAL.AI trennen. Drums, Bass, Arrangement und Mix entstehen anschließend lokal. Die Ergebnisse bleiben für weitere Mixe gespeichert.</p>
+ <p>Benötigt einen eigenen LALAL.AI-Zugang mit API-Key und Minutenguthaben. Die Abrechnung erfolgt direkt bei LALAL.AI. <a href="https://www.lalal.ai/api/" target="_blank" rel="noreferrer">API-Zugang</a> · <a href="https://www.lalal.ai/pricing/" target="_blank" rel="noreferrer">Preise</a></p>
+ <details><summary>{configured?'API-Key verwalten · verbunden':'API-Key verbinden'}</summary><div className="lalal-controls"><label>LALAL.AI API-Key<input type="password" autoComplete="off" value={key} disabled={disabled} onChange={e=>setKey(e.target.value)} placeholder="API-Key"/></label><button disabled={disabled||!key.trim()} onClick={connect}>Key prüfen & speichern</button>{configured&&<button disabled={disabled} onClick={()=>run(async()=>{const result=await api('/lalal/disconnect',{});setQuote(null);setMessage(result.configured?'Ein API-Key ist weiterhin über die Server-Umgebung konfiguriert.':'Gespeicherten Key entfernt.');await onRefresh()})}>Gespeicherten Key entfernen</button>}</div><p>Der Key bleibt auf diesem Mac in einer Datei, die nur dein Benutzer lesen kann. Er wird nicht im Browser gespeichert.</p></details>
+ {message&&<p role="status">{message}</p>}
+ <p>Track A: {ready.includes(a)?'LALAL.AI bereit':'Noch keine LALAL.AI-Stems'} · Track B: {ready.includes(b)?'LALAL.AI bereit':'Noch keine LALAL.AI-Stems'}</p>
+ <button disabled={disabled||!configured||!a||!b} onClick={check}>Songs & Minuten prüfen</button>
+ {quote&&<div className="lalal-confirm" role="region" aria-label="LALAL.AI Upload bestätigen"><h3>Diese Songs werden verarbeitet</h3><ul>{quote.tracks.map(t=><li key={t.id}><strong>{t.name}</strong> — {t.cached?'bereits lokal gespeichert · 0 neue Minuten':t.resume?'bestehenden Cloud-Auftrag fortsetzen · 0 neue Minuten':`Upload zu LALAL.AI · ca. ${t.minutes.toFixed(2)} Minuten`}</li>)}</ul><p>Geschätzter neuer Verbrauch: <strong>{quote.estimated_minutes.toFixed(2)} Minuten</strong> · Guthaben: {quote.minutes_left.toFixed(2)} Minuten. Eine Vocal-Trennung pro Song; tatsächliche Abrechnung durch LALAL.AI.</p><p>Mit dem Start werden die oben genannten, noch nicht verarbeiteten Audiodateien an LALAL.AI übertragen. Abbrechen kann bereits verbrauchte Minuten nicht zurückholen. Nach erfolgreicher Speicherung fordert die App die Löschung der Cloud-Dateien an; CDN-Kopien können laut Anbieter noch eine Stunde verfügbar sein. <a href="https://www.lalal.ai/privacy-policy/" target="_blank" rel="noreferrer">Datenschutz</a></p>{!quote.can_start&&<p role="alert">Das Minutenguthaben reicht voraussichtlich nicht aus.</p>}<button className="primary" disabled={disabled||!quote.can_start} onClick={start}>{quote.estimated_minutes>0?'Upload & kostenpflichtige Trennung starten':'Gespeicherte Verarbeitung verwenden / fortsetzen'}</button><button disabled={disabled} onClick={()=>setQuote(null)}>Schließen</button></div>}
+ </section>
+}
