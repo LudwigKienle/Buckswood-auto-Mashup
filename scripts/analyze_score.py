@@ -56,7 +56,7 @@ def main():
     duration = len(audio)/rate
     # Never extend a truncated prediction to the rest of the song.
     end_coverage = min(duration, max((e['time'] for e in events), default=0.) + 2.)
-    profile = {'duration': duration, 'chords': [], 'melody': [], 'structure': [],
+    profile = {'duration': duration, 'coverage_end': end_coverage, 'chords': [], 'melody': [], 'structure': [],
                'warnings': result.get('warnings', []), 'device': device, 'prompts': result['prompts'],
                'elapsed_seconds': round(time.monotonic()-started, 2)}
     for field, destination in (('chord', 'chords'), ('structure', 'structure')):

@@ -156,7 +156,11 @@ def candidates(profile, count, handle_seconds=HANDLE_SECONDS):
         else:
             entry = {'risk': rows[0]['cut'], 'extension': 0., 'clearance': 0.}
             release = {'risk': rows[-1]['end_cut'], 'extension': 0., 'clearance': 0.}
+        vocal_coverage = float(np.mean([r['score_vocal_coverage'] for r in rows])) if all(
+            'score_vocal_coverage' in r for r in rows) else None
         result.append({'index': i, 'start': rows[0]['start'], 'end': rows[-1]['end'],
+                       'score_vocal_coverage': vocal_coverage,
+                       'missing_vocal_cost': max(0., 1-vocal_coverage/.2) if vocal_coverage is not None else 0.,
                        'entry': entry, 'release': release,
                        'phrase_risk': .5*max(entry['risk'], release['risk'])+.25*(entry['risk']+release['risk']),
                        'entry_beats': (entry['clearance']-entry['extension'])*profile['bpm']/60,
@@ -256,6 +260,7 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None, target_bpm=Non
                     match = .65*forward+.35*reverse
                     value = match-.12*abs(forward-reverse)-.18*av['cut']-.18*bv['cut']
                     value -= .16*(av['phrase_risk']+bv['phrase_risk'])
+                    value -= .28*(av['missing_vocal_cost']+bv['missing_vocal_cost'])
                     # Pickups precede a downbeat, releases follow it. Penalize
                     # overlaps at A -> B instead of assuming both will fit.
                     overlap = max(0., av['release_beats']-bv['entry_beats'])
@@ -310,7 +315,8 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None, target_bpm=Non
             'Die Analyse versteht weder Textbedeutung noch Sprecheridentität.')
     score_analysis = {name: p['score_analysis'] for name, p in profiles.items() if 'score_analysis' in p}
     if score_analysis:
-        note += ' SheetSage2 ergänzt akustisch gestützte Akkorde und Melodien sowie geschätzte Songabschnitte.'
+        note += (' SheetSage2 ergänzt akustisch gestützte Akkorde und Melodien sowie geschätzte Songabschnitte. '
+                 'Bei brauchbarer Gesangstranskription werden Passagen ohne erkannte Gesangsmelodie niedriger bewertet.')
     else:
         note += ' Einzelne Akkorde werden im Basisplaner nicht benannt.'
     if margin is not None and margin < .015:
@@ -321,6 +327,7 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None, target_bpm=Non
                          'duration_seconds': round(duration, 2), 'planning_bpm': target, 'duration_policy': 'adaptive-3min',
                          'bpm_a': profiles['A']['bpm'], 'bpm_b': profiles['B']['bpm'],
                          'themes': {'A': [av['start'], av['end']], 'B': [bv['start'], bv['end']]},
+                         'transcribed_vocal_coverage': {'A': av['score_vocal_coverage'], 'B': bv['score_vocal_coverage']},
                          'similarity_a_over_b': forward, 'similarity_b_over_a': reverse,
                          'boundary_activity_a': av['cut'], 'boundary_activity_b': bv['cut'],
                          'pitch_candidates': [{'shift': s, 'score': q, 'phrase_bars': n} for q,s,n,_ in pitch_ranked],

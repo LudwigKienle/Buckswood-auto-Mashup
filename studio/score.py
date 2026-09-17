@@ -55,6 +55,9 @@ def _validate(data):
     duration = float(data['duration'])
     if not np.isfinite(duration) or duration <= 0:
         raise ValueError('Ungültige Länge der Musikanalyse.')
+    coverage_end = float(data.get('coverage_end', duration))
+    if not np.isfinite(coverage_end) or not 0 <= coverage_end <= duration:
+        raise ValueError('Ungültiger Analysebereich.')
     for field in ('chords', 'melody', 'structure'):
         if not isinstance(data[field], list):
             raise ValueError('Ungültige Musikanalyse.')
@@ -141,7 +144,21 @@ def enrich(profile, score):
     result = copy.deepcopy(profile)
     bars = result['bars']
     counts = {'chord_slots': 0, 'melody_slots': 0, 'structure_boundaries': 0}
+    # Absence of predicted vocals is useful only if the model has demonstrably
+    # transcribed vocals elsewhere in this song. Silent/incomplete predictions
+    # must not suppress every candidate. This is a soft cost, not a hard gate.
+    vocal_intervals = []
+    for note in score['melody']:
+        if vocal_intervals and note['start'] <= vocal_intervals[-1][1]:
+            vocal_intervals[-1][1] = max(vocal_intervals[-1][1], note['end'])
+        else:
+            vocal_intervals.append([note['start'], note['end']])
+    voiced_seconds = sum(end-start for start, end in vocal_intervals)
+    vocal_evidence = len(score['melody']) >= 8 and voiced_seconds >= 8 and not score.get('warnings')
     for bar in bars:
+        if vocal_evidence and bar['end'] <= score.get('coverage_end', score['duration']):
+            bar['score_vocal_coverage'] = sum(max(0., min(bar['end'], end)-max(bar['start'], start))
+                                              for start, end in vocal_intervals) / (bar['end']-bar['start'])
         edges = np.linspace(bar['start'], bar['end'], 9)
         for field, feature, weight, counter in (('chords', 'harmony', .25, 'chord_slots'),
                                                 ('melody', 'voice', .15, 'melody_slots')):
@@ -182,6 +199,7 @@ def enrich(profile, score):
             bar['structure'] = max(bar.get('structure', 0.), .65)
             counts['structure_boundaries'] += 1
     result['score_analysis'] = {'model': 'SheetSage2', 'revision': MODEL_REVISION, **counts,
+                                'vocal_evidence': bool(vocal_evidence),
                                 'warnings': score.get('warnings', []),
                                 'sections': [{k: row[k] for k in ('start', 'end', 'label')} for row in score['structure']]}
     return result

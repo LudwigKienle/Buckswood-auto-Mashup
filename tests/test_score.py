@@ -56,8 +56,22 @@ def test_short_or_off_grid_structure_predictions_do_not_force_phrase_changes():
     acoustic = profile(); data = annotations()
     data['structure'] = [{'start': 0., 'end': 7., 'label': 'verse'}, {'start': 7., 'end': 24., 'label': 'chorus'}]
     assert score.enrich(acoustic, data)['score_analysis']['structure_boundaries'] == 0
+
     data['structure'] = [{'start': 0., 'end': 2., 'label': 'verse'}, {'start': 2., 'end': 24., 'label': 'chorus'}]
     assert score.enrich(acoustic, data)['score_analysis']['structure_boundaries'] == 0
+
+
+def test_instrumental_leakage_is_penalized_only_when_vocal_transcription_is_usable():
+    from studio.quality import candidates
+    acoustic = profile(); data = annotations()
+    data['melody'] = [{'start':float(i), 'end':float(i+1), 'chroma':np.eye(12)[0].tolist()} for i in range(12)]
+    enriched = score.enrich(acoustic, data)
+    options = candidates(enriched, 4)
+    assert options[0]['missing_vocal_cost'] == 0
+    assert options[-1]['missing_vocal_cost'] == 1
+    # Model failure/empty transcription must retain the acoustic-only behavior.
+    data['melody'] = []
+    assert all(c['missing_vocal_cost'] == 0 for c in candidates(score.enrich(acoustic, data), 4))
 
 
 def test_incomplete_stale_corrupt_and_changed_audio_caches_are_ignored(tmp_path, monkeypatch):
