@@ -1,6 +1,8 @@
 """Versioned two-stage separation; retain the original Demucs stems for A/B."""
 import json
 import os
+import math
+import re
 import shutil
 import subprocess
 import sys
@@ -41,11 +43,31 @@ def stems_folder(track, quality='auto'):
     return TRACKS/track['id']/({'hq':HQ_FOLDER, 'lalal':FOLDER}.get(backend, 'stems'))
 
 
+def worker_progress(text):
+    """Read RoFormer JSON and Demucs' carriage-return tqdm output."""
+    for line in reversed(text.splitlines()[-20:]):
+        try:
+            update = json.loads(line)
+            done, total = float(update['done']), float(update['total'])
+            if total > 0 and math.isfinite(done) and math.isfinite(total) and done >= 0:
+                return min(done/total, 1.), f'{done:g}/{total:g} Audioblöcke'
+        except (ValueError, KeyError, TypeError):
+            pass
+        match = re.search(r'^\s*(\d{1,3})%\|.*\|\s*([\d.]+)/([\d.]+)\s*\[([^]\n]+)\]', line)
+        if match:
+            done, total = float(match[2]), float(match[3])
+            if total > 0 and math.isfinite(done) and math.isfinite(total):
+                fraction = min(done/total, 1.)
+                return fraction, f'{round(fraction*100)} % der Audiospur verarbeitet'
+    return None
+
+
 def run_worker(command, logpath, cancel, progress, lower, upper, label):
     from .engine import Cancelled
     env = {**os.environ, 'OMP_NUM_THREADS': '6', 'MKL_NUM_THREADS': '6'}
     with logpath.open('w') as log:
         process = subprocess.Popen(command, stdout=log, stderr=log, cwd=ROOT, env=env)
+        last_update = None
         while process.poll() is None:
             if cancel.wait(1):
                 process.terminate()
@@ -55,16 +77,15 @@ def run_worker(command, logpath, cancel, progress, lower, upper, label):
                     process.kill()
                     process.wait()
                 raise Cancelled('Abgebrochen; bisherige Stems bleiben erhalten')
-            lines = logpath.read_text(errors='replace').splitlines()
-            if lines:
-                try:
-                    update = json.loads(lines[-1])
-                    progress(round(lower+(upper-lower)*update['done']/update['total']),
-                             f'{label}: {update["done"]}/{update["total"]} Audioblöcke')
-                except (ValueError, KeyError, TypeError):
-                    pass
+            update = worker_progress(logpath.read_text(errors='replace'))
+            if update is not None and update != last_update:
+                fraction, detail = update
+                progress(round(lower+(upper-lower)*fraction), f'{label}: {detail}')
+                last_update = update
     if process.returncode:
         raise RuntimeError(f'{label} fehlgeschlagen: '+logpath.read_text(errors='replace')[-1600:])
+
+    progress(upper, f'{label}: Trennung abgeschlossen')
 
 
 def separate_hq(track, progress, cancel):
