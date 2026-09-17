@@ -76,11 +76,12 @@ def submit(kind, work):
 def state():
     exports = [json.loads(p.read_text()) for p in sorted(EXPORTS.glob('*/arrangement.json'), key=lambda p: p.stat().st_mtime, reverse=True)]
     defaults=json.loads((DATA/'project.json').read_text()) if (DATA/'project.json').exists() else {}
-    return {'token': token, 'tracks': list_tracks(), 'exports': exports, 'jobs': list(jobs.values()), 'data_dir': str(DATA), 'defaults':defaults, 'hq_installed': __import__('studio.separation', fromlist=['installed']).installed()}
+    from . import score
+    return {'score_installed': score.installed(), 'score_ready': [t['id'] for t in list_tracks() if score.cached(t)], 'token': token, 'tracks': list_tracks(), 'exports': exports, 'jobs': list(jobs.values()), 'data_dir': str(DATA), 'defaults':defaults, 'hq_installed': __import__('studio.separation', fromlist=['installed']).installed()}
 
 @app.get('/api/health')
 def health():
-    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 6}
+    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 7}
 
 @app.post('/api/upload')
 async def upload(file: UploadFile):
@@ -150,9 +151,9 @@ def quality_plan(pair: PairRequest):
         if installed():
             current = []
             for i, track in enumerate((a,b)):
-                current.append(separate_hq(track, lambda p,m: progress(round(i*35+p*.35),m), cancel))
-            return plan(*current, lambda p,m: progress(round(70+p*.3),m), cancel, target_bpm=pair.target_bpm)
-        return plan(a, b, progress, cancel, target_bpm=pair.target_bpm)
+                current.append(separate_hq(track, lambda p,m: progress(round(i*20+p*.2),m), cancel))
+            return plan(*current, lambda p,m: progress(round(40+p*.6),m), cancel, target_bpm=pair.target_bpm, use_score=pair.use_score)
+        return plan(a, b, progress, cancel, target_bpm=pair.target_bpm, use_score=pair.use_score)
     return submit('plan', work)
 
 @app.post('/api/separate-hq')

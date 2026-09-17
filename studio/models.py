@@ -33,3 +33,4 @@ class PairRequest(BaseModel):
     track_a: str
     track_b: str
     target_bpm: float | None = Field(default=None, ge=60, le=200)
+    use_score: bool = True

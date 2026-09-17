@@ -113,3 +113,19 @@ Built on [AutoMashup](https://github.com/ax-le/automashup) by Axel Marmoret for 
 This is an independent application, not an official release of those projects. Its planner and rendering pipeline are implemented here; it does not run the complete upstream AutoMashup research pipeline.
 
 Copyright © 2026 Ludwig Kienle and contributors. Project code is licensed under **GPL-3.0-only**; see [LICENSE](LICENSE). Dependency and model licenses remain their own; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This repository contains no songs, recordings, model weights or rendered mashups. The code license does not grant rights to input music or output recordings.
+
+## Optional chord and song-structure analysis (SheetSage2)
+
+After the regular installation, run:
+
+```sh
+./scripts/setup_score.sh
+```
+
+Restart the studio when it is idle. Enable **Akkorde & Songstruktur einbeziehen** and click **Musikalisch planen**. The first analysis of each song can take several minutes; subsequent plans reuse a local cache. Disable the option for an acoustic-only comparison. The planner reports whether SheetSage2 was used or whether it fell back to the existing analysis.
+
+The installer downloads pinned official [SheetSage2](https://huggingface.co/m-a-p/SheetSage2) and [MERT-v2-FullSong](https://huggingface.co/m-a-p/MERT-v2-FullSong) snapshots (about 2.8 GB of weights) into the local data directory. An independent Python 3.11 environment uses PyTorch 2.8 and Transformers 4.45.2 without changing the separation environment. Inference is offline and automatically selects CUDA, Apple MPS, or CPU. Set `MASHUP_SCORE_DEVICE=cpu` before launching the studio if the accelerator is unavailable. No paid service is required.
+
+The **model weights are CC BY-NC 4.0**, separately from this repository's GPL code. They are not bundled in this repository; see the linked model cards for their terms. YuE2 audio generation is not enabled by this integration.
+
+SheetSage2 supplies estimated chords, vocal melody and section boundaries. The planner cross-checks predicted pitches against the separated audio, blends supported predictions conservatively, and uses sustained section changes as soft arrangement costs. Original vocals, stems and the observed Beat This! timing remain the source of the rendered audio. These are fallible estimates, not lyric understanding or a guarantee of better-sounding results. See [quality methods](docs/quality.md).

@@ -24,3 +24,12 @@ The RoFormer conversion's pinned model card documents the original model's move 
 The pinned Python requirements and npm lockfile identify the installed packages. These include NumPy, SciPy, librosa, PyTorch/torchaudio, matplotlib, SoundFile/libsndfile, pyrubberband, FastAPI/Starlette, Uvicorn, python-multipart, MLX, huggingface-hub, React and Vite. Their installed distributions contain their respective licenses and notices. FFmpeg is an external executable supplied by the user; its licensing depends on its build. No FFmpeg binary is bundled.
 
 Retain the relevant upstream license files if you distribute dependencies or build a binary bundle. The project license does not relicense songs, recordings, model weights or other third-party material.
+
+## Optional SheetSage2 / MERT-v2 analysis
+
+The optional installer downloads, but this repository does not redistribute:
+
+- [m-a-p/SheetSage2](https://huggingface.co/m-a-p/SheetSage2), revision `cd2f39b3b807b81f6e32bbb8ea6011da40f77649`.
+- [m-a-p/MERT-v2-FullSong](https://huggingface.co/m-a-p/MERT-v2-FullSong), revision `d8ba1c745e733b3908ce6ad16ebeb17ac7600a42`.
+
+Their model weights are licensed CC BY-NC 4.0. Consult each snapshot's LICENSE and THIRD_PARTY_NOTICES.md for model and upstream component terms. These optional model terms are separate from the application source license. The isolated worker also uses PyTorch, torchaudio, Transformers, Hugging Face Hub, safetensors, NumPy, SciPy, mir_eval, pretty_midi, mido and SoundFile under their respective upstream licenses.

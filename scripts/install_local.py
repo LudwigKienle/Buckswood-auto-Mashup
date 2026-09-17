@@ -12,7 +12,7 @@ if ROOT != target:
                 shutil.copyfile(path, dest)
     for name in ('web/package.json', 'web/package-lock.json', 'web/vite.config.js',
                  'web/index.html', 'requirements.txt', 'requirements-hq.txt',
-                 'requirements-dev.txt', 'pytest.ini', 'README.md', 'LICENSE',
+                 'requirements-dev.txt', 'requirements-score.txt', 'pytest.ini', 'README.md', 'LICENSE',
                  'THIRD_PARTY_NOTICES.md', 'CONTRIBUTING.md', 'docs/quality.md'):
         dest = target / name
         dest.parent.mkdir(parents=True, exist_ok=True)

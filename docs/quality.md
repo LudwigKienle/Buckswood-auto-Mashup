@@ -49,3 +49,15 @@ python -m scripts.compare_separation YOUR_TRACK_ID --start 30 --seconds 16 --lab
 Run it with the installed Python runtime from the README. Both separation versions must already exist. It exports matched excerpts and a combined comparison into the local data folder's `quality-ab` directory.
 
 The automated tests check DSP invariants and planning behavior with synthetic fixtures. No benchmark improvement or professional production quality is claimed. Future work should use licensed evaluation stems and blind listening comparisons, especially for lyric continuity, local chord compatibility and rhythm-aware placement of vocals.
+
+## V7: optional SheetSage2 score guidance
+
+The pinned model transcribes the original mixture locally, with the official full-song overlapping-window inference and timestamp, rhythm, structure, key, full-chord and vocal-melody tasks. Instrumental-note transcription is omitted because the planner does not use it. Chords, vocal notes and structural labels are mapped by their timestamps onto the existing eight analysis slots per observed bar. The original acoustic profiles are copied before enrichment and remain unchanged on disk.
+
+Chord and melody vectors require at least 50% slot coverage and cosine agreement above 0.55 with the separated accompaniment or vocal chroma. The contribution ramps with agreement and is capped at 25% for chords and 15% for melody. Melody also requires measured vocal activity. Unknown chords and uncovered or contradictory regions retain their acoustic features. This agreement is a heuristic cross-check, not calibrated model confidence. The normal sequence comparison and pitch-shift penalties then operate on the enriched features.
+
+A predicted change of section contributes a soft cost only when both neighboring sections last at least two bars and the boundary lies within 30% of one bar of an observed downbeat. It neither moves the grid nor forcibly clips a phrase. Repeated identical labels are merged. Predicted intervals are not extrapolated more than two seconds beyond the final decoded event, preventing truncated output from describing the rest of a song. Structure estimates can still be wrong and do not establish lyrical context.
+
+The worker is isolated from the server runtime and has no network access through the model loader (`local_files_only` plus Hub offline mode). It reads the original local WAV and writes analysis into a temporary directory. Only validated, completed results are cached, keyed by model revisions, schema version, track ID, file size and modification time. Cancellation terminates the worker without publishing partial results. Errors fall back to acoustic planning and are reported in the resulting plan. Raw events, ABC and MIDI remain local for inspection. Model weights and user media are never committed.
+
+The optional models carry CC BY-NC 4.0 terms. This feature does not synthesize new audio with YuE2 and does not repair separation artifacts; it helps choose musical material for the existing renderer.

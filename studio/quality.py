@@ -1,6 +1,6 @@
 """Local downbeat, vocal-boundary and time-aligned pitch analysis.
 
-These are musical planning heuristics, not lyric understanding or chord labels.
+Optional SheetSage2 annotations supplement the acoustic heuristics, not lyric understanding.
 Profiles are cached separately from the original audio and the basic analysis.
 """
 import json
@@ -184,10 +184,31 @@ def compatibility(voice, harmony, active, voice_shift=0, harmony_shift=0):
     return float(.75*np.mean(matches)+.25*np.quantile(matches, .2))
 
 
-def plan(a, b, progress, cancel, fixed_pitch=None, target_bpm=None):
-    from .engine import check_cancel
-    profiles = {name: profile(track, progress, cancel) for name, track in [('A', a), ('B', b)]}
+def plan(a, b, progress, cancel, fixed_pitch=None, target_bpm=None, use_score=False):
+    from .engine import check_cancel, Cancelled
+    from . import score
+    scores, warnings = {}, []
+    if use_score:
+        for name, track in [('A', a), ('B', b)]:
+            try:
+                offset = 0 if name == 'A' else 35
+                scores[name] = score.ensure(track, lambda p, m: progress(round(offset+p*.35), m), cancel)
+            except Cancelled:
+                raise
+            except (OSError, ValueError, RuntimeError) as exc:
+                warnings.append(f'Track {name}: {exc}')
+    profiles = {}
+    lower = 70 if use_score else 0
+    span = (95-lower)/2
+    for i, (name, track) in enumerate([('A', a), ('B', b)]):
+        profiles[name] = profile(track, lambda p, m: progress(round(lower+i*span+p*span/100), m), cancel)
+    progress(96, 'Passende zusammenhängende Themen vergleichen')
+    profiles = {name: score.enrich(value, scores.get(name)) for name, value in profiles.items()}
     result = coherent_plan(profiles, fixed_pitch, lambda: check_cancel(cancel), target_bpm)
+    result['analysis']['score_requested'] = use_score
+    result['analysis']['score_warnings'] = warnings
+    if warnings:
+        result['analysis']['note'] += ' Zusätzliche Analyse teilweise nicht verfügbar; vorhandene Audioanalyse verwendet.'
     progress(100, 'Zusammenhängendes Arrangement fertig')
     return result
 
@@ -286,12 +307,17 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None, target_bpm=Non
             f'Zwei feste Motive mit jeweils {count} fortlaufenden Takten. Beim Einstieg von B bleibt dessen '
             'Begleitung erhalten; die Instrumente von A kommen später hinzu. Das erste Motiv kehrt im Drop zurück. '
             'Längere Gesangspausen, Platz für Auftakte und Wortenden sowie Tonhöhen und Klangwechsel werden geprüft. '
-            'Textbedeutung, Sprecher und Akkorde werden nicht sicher erkannt.')
+            'Die Analyse versteht weder Textbedeutung noch Sprecheridentität.')
+    score_analysis = {name: p['score_analysis'] for name, p in profiles.items() if 'score_analysis' in p}
+    if score_analysis:
+        note += ' SheetSage2 ergänzt akustisch gestützte Akkorde und Melodien sowie geschätzte Songabschnitte.'
+    else:
+        note += ' Einzelne Akkorde werden im Basisplaner nicht benannt.'
     if margin is not None and margin < .015:
         note += f' Tonhöhe unklar: {pitch:+d} und {pitch_ranked[1][1]:+d} Halbtöne bitte vergleichen.'
     return {'sections': sections, 'pitch_b': pitch,
             'target_bpm': suggested,
-            'analysis': {'version': 6, 'phrase_bars': count, 'strategy': 'continuous-themes', 'intro': intro,
+            'analysis': {'version': 7, 'score_analysis': score_analysis, 'phrase_bars': count, 'strategy': 'continuous-themes', 'intro': intro,
                          'duration_seconds': round(duration, 2), 'planning_bpm': target, 'duration_policy': 'adaptive-3min',
                          'bpm_a': profiles['A']['bpm'], 'bpm_b': profiles['B']['bpm'],
                          'themes': {'A': [av['start'], av['end']], 'B': [bv['start'], bv['end']]},
