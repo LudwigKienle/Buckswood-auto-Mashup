@@ -72,3 +72,15 @@ def test_render_routes_four_sources_and_solo_instrument_with_correct_pitch(monke
     assert result['sections'][0]['source_b_snapped'] is None
     audio,rate=sf.read(EXPORTS/result['id']/'mashup.wav')
     assert np.isfinite(audio).all() and len(audio)/rate==pytest.approx(8,abs=.01)
+
+
+def test_mastering_parses_ffmpeg_json_followed_by_progress():
+    import json
+    from studio.engine import loudness_stats
+    values={'input_i':'-18.36','input_tp':'-17.28','input_lra':'0.00','input_thresh':'-28.36','target_offset':'0.1'}
+    log='[Parsed_loudnorm] '+json.dumps(values)+'\n[out] global headers:0KiB\nsize=N/A time=00:00:08.00 bitrate=N/A'
+    assert loudness_stats(log)==values
+    with pytest.raises(ValueError,match='keine Lautheitsmessung'):
+        loudness_stats('empty ffmpeg output')
+    with pytest.raises(ValueError,match='hörbares Audio'):
+        loudness_stats(json.dumps({**values,'input_i':'-inf'}))

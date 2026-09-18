@@ -332,6 +332,21 @@ def backing_runs(sections, timing):
                 preceding += sections[k].bars
     return runs
 
+def loudness_stats(output):
+    """FFmpeg versions may append progress and muxer logs after the JSON block."""
+    begin = output.rfind('{')
+    if begin < 0:
+        raise ValueError('FFmpeg lieferte keine Lautheitsmessung.')
+    try:
+        stats, _ = json.JSONDecoder().raw_decode(output[begin:])
+        for name in ('input_i', 'input_tp', 'input_lra', 'input_thresh', 'target_offset'):
+            if not np.isfinite(float(stats[name])):
+                raise ValueError('nonfinite loudness')
+        return stats
+    except (ValueError, KeyError, TypeError):
+        raise ValueError('FFmpeg lieferte keine gültige Lautheitsmessung. Enthält der Mix hörbares Audio?') from None
+
+
 def render(request, job_id, progress, cancel):
     tracks = {name: read_track(id) for name, id in request.track_ids().items()}
     a, b = tracks['A'], tracks['B']
@@ -472,7 +487,7 @@ def render(request, job_id, progress, cancel):
                               'loudnorm=I=-14:TP=-1.2:LRA=11:print_format=json', '-f', 'null', '-'], capture_output=True, text=True)
     if measure.returncode:
         raise RuntimeError(measure.stderr[-1000:])
-    stats = json.loads(measure.stderr[measure.stderr.rfind('{'):])
+    stats = loudness_stats(measure.stderr)
     normalization = ('loudnorm=I=-14:TP=-1.2:LRA=11:' + ':'.join([
         f'measured_I={stats["input_i"]}', f'measured_TP={stats["input_tp"]}', f'measured_LRA={stats["input_lra"]}',
         f'measured_thresh={stats["input_thresh"]}', f'offset={stats["target_offset"]}', 'linear=true']))
