@@ -146,3 +146,9 @@ Quotes expire after ten minutes. A repeated start with the same quote returns th
 Cancellation requests remote cancellation where a task ID is known; it cannot guarantee a refund or immediate termination of an in-flight upload. Successfully downloaded, validated and locally completed stems are retained. The app requests deletion of that source's cloud files after completion; the provider notes that CDN links can remain available for one hour. Failed/interrupted uploads otherwise follow the provider's retention period. A failed cloud deletion is recorded as `lalal_cleanup_warning` in the track metadata. Original audio and local separation versions are preserved.
 
 Tests mock the API and use synthetic audio; no live paid request is part of the test suite. Actual account eligibility, billing, network availability and audible quality require a real provider run. LALAL.AI quality is not guaranteed to outperform RoFormer on every song.
+
+### V8 arrangement planning
+
+Accompaniment handovers are compared at musical bar boundaries while keeping the response vocal continuous. The planner also considers local tempo deformation, delayed vocal entries, long internal vocal gaps and accompaniment changes. Intros use harmonic accompaniment energy even without drums. Auto tempo stays automatic and resets when switching songs; manual tempo remains available for the current pair.
+
+The [composition research report](docs/mashup-composition-research.md) connects classical form, thematic transformation, perception research and automatic mashup literature to the implemented heuristics and their limits. It is in German and distinguishes implemented changes from future experiments. No additional paid service is required.

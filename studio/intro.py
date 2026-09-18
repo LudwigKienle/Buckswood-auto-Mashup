@@ -7,7 +7,7 @@ from .storage import TRACKS
 def choose_intro(profile, entry):
     """Compare only lead-ins that actually connect to the selected backing."""
     bars = profile['bars']
-    following = np.mean([b['energy'] for b in bars[entry:entry+4]])
+    following = np.mean([b.get('backing_energy', b['energy']) for b in bars[entry:entry+4]])
     choices = []
     for count in (8, 4):
         if entry < count:
@@ -15,12 +15,13 @@ def choose_intro(profile, entry):
         rows = bars[entry-count:entry]
         if not all(b['regular'] for b in rows):
             continue
-        energy = np.array([b['energy'] for b in rows])
+        energy = np.array([b.get('backing_energy', b['energy']) for b in rows])
         reference = max(float(following), float(np.mean(energy)), 1e-6)
         opening = float(np.mean(energy[:count//2]))/reference
         rise = float(np.mean(energy[count//2:])-np.mean(energy[:count//2]))/reference
         jumps = float(np.max(abs(np.diff(energy))))/reference
         score = .12*(count == 8)-.18*min(opening, 2)+.18*np.clip(rise, -1, 1)-.08*min(jumps, 2)
+        score -= .15*max((b.get('backing_structure', 0.) for b in rows[1:]), default=0.)
         choices.append({'bars': count, 'index': entry-count, 'start': rows[0]['start'],
                         'end': bars[entry]['start'], 'score': float(score), 'strategy': 'connected-lead-in'})
     return max(choices, key=lambda c:c['score']) if choices else None
@@ -34,7 +35,7 @@ def lead_in(track, start, max_bars=8, manual_bpm=None):
     if path and path.exists() and not manual_bpm:
         grid = np.asarray(json.loads(path.read_text())['downbeats'])
         index = int(np.argmin(abs(grid-start)))
-        for version in (3, 2):
+        for version in (4, 3, 2):
             cached = path.parent/f'musical-profile-v{version}.json'
             if cached.exists():
                 profile = json.loads(cached.read_text())

@@ -63,3 +63,13 @@ The worker is isolated from the server runtime and has no network access through
 The optional models carry CC BY-NC 4.0 terms. This feature does not synthesize new audio with YuE2 and does not repair separation artifacts; it helps choose musical material for the existing renderer.
 
 When at least eight vocal notes spanning eight seconds have been transcribed and the model reports no truncation warnings, the planner also measures vocal-note coverage per candidate. Coverage below 20% incurs a soft cost, capped at 0.28 per singer. This helps avoid treating separated synth or saxophone leakage as a vocal answer in an instrumental passage. Empty or failed transcriptions and uncovered audio regions incur no such cost. Missing model notes can still be false negatives, so this never excludes a candidate outright.
+
+## V8: compare accompaniment handovers and local deformation
+
+The planner now compares accompaniment changes at 8-bar positions within a 16-, 24- or 32-bar response (4 bars for an 8-bar response). B's vocal always stays continuous. Each candidate considers reverse vocal/harmony compatibility, outgoing-to-incoming chroma context, vocal activity at the handover, and internal backing-timbre changes. These are soft preferences, not cadence or voice-leading recognition.
+
+Version 4 acoustic profiles add harmonic-accompaniment energy and MFCC novelty, independently from vocal novelty. Intro selection uses that energy rather than only drums. Local bar-to-target tempo ratios receive a reciprocal-symmetric soft cost beyond an 8% factor; that threshold is an engineering preference, not a guaranteed artifact boundary. Vocal candidates also distinguish delayed entries and long internal silences from ordinary breaths and trailing releases. Existing source stems and score caches remain reusable.
+
+Auto tempo remains automatic across planning and resets when changing the song pair. Explicit tempo choices within a pair are preserved. The displayed tempo is sent to rendering. See [the composition research and implementation limits](mashup-composition-research.md), including classical form, thematic transformation, perception and modern mashup research.
+
+The V8 grid check also validates bars against a local nine-bar median and the detector's four-beat count, rather than rejecting every passage outside one global song tempo. Sustained locally regular passages survive a tempo change; missed/doubled bars and non-four-beat detections remain excluded. This does not establish the true meter or repair faulty detections. A compact coherent plan can be preferable to a long forced arrangement.

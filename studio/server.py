@@ -82,7 +82,7 @@ def state():
 
 @app.get('/api/health')
 def health():
-    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 7}
+    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 7, 'planner_version': 8}
 
 @app.post('/api/upload')
 async def upload(file: UploadFile):

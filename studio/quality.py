@@ -10,8 +10,10 @@ import librosa
 from .storage import TRACKS, save_json
 from .phrases import quiet_regions, phrase_boundary, HANDLE_SECONDS, handle_duration
 from .intro import choose_intro
+from .arrangement_metrics import (vocal_flow, tempo_fit, handover_options,
+                                  transition_context, harmonic_jump, backing_change, regular_bars)
 
-VERSION = 3
+VERSION = 4
 
 
 def ensure_grid(track, progress, cancel):
@@ -46,7 +48,7 @@ def boundary_cost(envelope, times, at, reference):
 
 def profile(track, progress, cancel, separation_quality='auto'):
     from .engine import separate, check_cancel
-    path = TRACKS / track['id'] / 'musical-profile-v3.json'
+    path = TRACKS / track['id'] / 'musical-profile-v4.json'
     from .separation import selected_backend
     backend = selected_backend(track, separation_quality)
     if path.exists():
@@ -68,6 +70,7 @@ def profile(track, progress, cancel, separation_quality='auto'):
     harmonic = other + bass
     voice_env = librosa.feature.rms(y=voice, frame_length=1024, hop_length=hop)[0]
     drum_env = librosa.feature.rms(y=drums, frame_length=1024, hop_length=hop)[0]
+    backing_env = librosa.feature.rms(y=harmonic, frame_length=1024, hop_length=hop)[0]
     times = librosa.frames_to_time(np.arange(len(voice_env)), sr=sr, hop_length=hop)
     reference = float(np.quantile(voice_env, .8))
     check_cancel(cancel)
@@ -80,8 +83,9 @@ def profile(track, progress, cancel, separation_quality='auto'):
     # Timbre over several bars helps flag a verse/chorus or singer change.
     # This is a novelty heuristic, not lyric or speaker recognition.
     mfcc = librosa.feature.mfcc(y=voice, sr=sr, n_mfcc=9, n_fft=2048, hop_length=hop)[1:]
+    backing_mfcc = librosa.feature.mfcc(y=harmonic, sr=sr, n_mfcc=9, n_fft=2048, hop_length=hop)[1:]
     bars = []
-    median = float(np.median(np.diff(downbeats)))
+    regular = regular_bars(downbeats, grid.get('beats'))
     for i, (start, end) in enumerate(zip(downbeats[:-1], downbeats[1:])):
         chunks = np.linspace(start, end, 9)
         features = [[], []]
@@ -93,15 +97,24 @@ def profile(track, progress, cancel, separation_quality='auto'):
                 value = np.mean(chroma[:, mask], axis=1) if mask.any() else np.zeros(12)
                 features[k].append((value / max(np.linalg.norm(value), 1e-8)).round(5).tolist())
         mask = (times >= start) & (times < end)
-        bars.append({'start': float(start), 'end': float(end), 'regular': bool(abs((end-start)/median-1) < .12),
+        bars.append({'start': float(start), 'end': float(end), 'regular': regular[i],
                      'voice': features[0], 'harmony': features[1], 'activity': activity,
                      'energy': float(np.mean(drum_env[mask])) if mask.any() else 0.,
+                     'backing_energy': float(np.mean(backing_env[mask])) if mask.any() else 0.,
+                     'backing_texture': np.mean(backing_mfcc[:, mask], axis=1).tolist() if mask.any() else None,
                      'cut': boundary_cost(voice_env, times, start, reference),
                      'end_cut': boundary_cost(voice_env, times, end, reference),
                      'texture': np.mean(mfcc[:, mask & (voice_env > max(.006, reference*.25))], axis=1).tolist()
                          if np.any(mask & (voice_env > max(.006, reference*.25))) else None})
     add_structure(bars, reference)
-    tempo = float(np.median([240/(b['end']-b['start']) for b in bars if b['regular']]))
+    backing_rows = [{'texture': r['backing_texture'], 'activity': [1.]*8} for r in bars]
+    add_structure(backing_rows, 1.)
+    for row, backing in zip(bars, backing_rows):
+        row['backing_structure'] = backing['structure']
+    valid_tempos = [240/(b['end']-b['start']) for b in bars if b['regular']]
+    # Preserve a finite estimate for the diagnostic/fallback path even when no
+    # trustworthy 4/4 region exists. Such bars still cannot become candidates.
+    tempo = float(np.median(valid_tempos)) if valid_tempos else float(track['bpm'])
     # Longer intervals reduce the model's 20 ms timestamp quantisation error.
     spans = [960/(downbeats[i+4]-downbeats[i]) for i in range(len(downbeats)-4)
              if all(b['regular'] for b in bars[i:i+4])]
@@ -170,7 +183,7 @@ def candidates(profile, count, handle_seconds=HANDLE_SECONDS):
                        'entry_change': rows[0].get('structure', 0.),
                        'voice': np.concatenate([r['voice'] for r in rows]),
                        'harmony': np.concatenate([r['harmony'] for r in rows]),
-                       'active': active, 'coverage': float(active.mean()),
+                       'active': active, 'coverage': float(active.mean()), 'vocal_flow': vocal_flow(active),
                        'energy': float(np.mean([r['energy'] for r in rows]))})
     energies = [r['energy'] for r in result]
     for row in result:
@@ -224,11 +237,22 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None, target_bpm=Non
     a 4-, 8- or 16-bar boundary during B's phrase. Lyrics are not interpreted.
     """
     choices = []
-    suggested = round(math.sqrt(profiles['A']['bpm']*profiles['B']['bpm']))
+    suggested = round(np.clip(math.sqrt(profiles['A']['bpm']*profiles['B']['bpm']), 60, 200), 1)
     target = target_bpm or suggested
     for count in (32, 24, 16, 8):
         ca = candidates(profiles['A'], count, handle_duration(target)*target/profiles['A']['bpm'])
         cb = candidates(profiles['B'], count, handle_duration(target)*target/profiles['B']['bpm'])
+        for source, entries in [('A', ca), ('B', cb)]:
+            for entry in entries:
+                rows = profiles[source]['bars'][entry['index']:entry['index']+count]
+                entry['tempo_fit'] = tempo_fit(rows, target)
+                entry['switches'] = {n: {
+                    'before': transition_context(rows, n, outgoing=True),
+                    'after': transition_context(rows, n),
+                    'voice_cut': rows[n]['cut'],
+                    'backing_before': backing_change(rows[:n]),
+                    'backing_after': backing_change(rows[n:]),
+                } for n in handover_options(count)}
         by_b = {v['index']: v for v in cb}
         aa = [v for v in ca if .3 <= v['coverage'] <= .98 and
               v['index']+count+4 <= len(profiles['A']['bars']) and
@@ -238,6 +262,7 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None, target_bpm=Non
               and all(r['regular'] for r in profiles['B']['bars'][v['index']-4:v['index']+2*count+4])]
         for bed in bb:
             bed['intro'] = choose_intro(profiles['B'], bed['index'])
+            bed['backing_change'] = backing_change(profiles['B']['bars'][bed['index']:bed['index']+count])
         if aa and bb:
             choices.append((count, aa, bb, by_b))
     if not choices:
@@ -245,21 +270,35 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None, target_bpm=Non
     ranked = []
     shifts = range(-5, 6) if fixed_pitch is None else [int(fixed_pitch)]
     for count, aa, bb, by_b in choices:
-        # A 24-bar theme is grouped as 8 + 16, keeping the backing handover
-        # on an 8-bar boundary instead of switching after an arbitrary 12.
-        handover = 8 if count == 24 else count//2
         for pitch in shifts:
             check()
             best = None
             for av in aa:
+                check()
                 for bed in bb:
                     bv = by_b[bed['index']+count]
                     forward = compatibility(av['voice'], bed['harmony'], av['active'], harmony_shift=pitch)
-                    reverse = compatibility(bv['voice'][handover*8:], av['harmony'][handover*8:],
-                                            bv['active'][handover*8:], voice_shift=pitch)
+                    # Keep B's vocal continuous while trying musical points for
+                    # replacing its harmony. Never move or duplicate a syllable.
+                    switches = []
+                    for handover in handover_options(count):
+                        reverse = compatibility(bv['voice'][handover*8:], av['harmony'][handover*8:],
+                                                bv['active'][handover*8:], voice_shift=pitch)
+                        left, right = bv['switches'][handover], av['switches'][handover]
+                        jump = harmonic_jump(left['before'], right['after'], pitch)
+                        structure = bed['backing_change']+left['backing_before']+right['backing_after']
+                        transition_cost = .08*jump+.05*left['voice_cut']+.12*structure
+                        # Comparable scoring at every handover; do not reward
+                        # a near-zero cross-song passage solely for being short.
+                        quality = .35*reverse-.12*abs(forward-reverse)-transition_cost
+                        switches.append((quality, handover, reverse, jump, structure))
+                    _, handover, reverse, jump, structure = max(switches, key=lambda row: row[0])
                     match = .65*forward+.35*reverse
                     value = match-.12*abs(forward-reverse)-.18*av['cut']-.18*bv['cut']
                     value -= .16*(av['phrase_risk']+bv['phrase_risk'])
+                    value -= .18*(av['vocal_flow']['cost']+bv['vocal_flow']['cost'])
+                    value -= .08*jump+.05*bv['switches'][handover]['voice_cut']+.12*structure
+                    value -= .10*(av['tempo_fit']['cost']+bed['tempo_fit']['cost']+bv['tempo_fit']['cost'])
                     value -= .28*(av['missing_vocal_cost']+bv['missing_vocal_cost'])
                     # Pickups precede a downbeat, releases follow it. Penalize
                     # overlaps at A -> B instead of assuming both will fit.
@@ -278,11 +317,10 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None, target_bpm=Non
                     duration = (bed['intro']['bars']+3*count+8)*240/target
                     value += .06*max(0., 1-abs(duration-180)/120)
                     if best is None or value > best[0]:
-                        best = value, av, bed, bv, forward, reverse
+                        best = value, av, bed, bv, forward, reverse, handover, jump, structure
             ranked.append((best[0], pitch, count, best))
     ranked.sort(key=lambda row: (row[0], -abs(row[1]), row[2]), reverse=True)
-    _, pitch, count, (_, av, bed, bv, forward, reverse) = ranked[0]
-    handover = 8 if count == 24 else count//2
+    _, pitch, count, (_, av, bed, bv, forward, reverse, handover, jump, structure) = ranked[0]
     ai, bi = av['index'], bed['index']
     intro = bed['intro']
     def at(source, index):
@@ -312,6 +350,9 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None, target_bpm=Non
             f'Zwei feste Motive mit jeweils {count} fortlaufenden Takten. Beim Einstieg von B bleibt dessen '
             'Begleitung erhalten; die Instrumente von A kommen später hinzu. Das erste Motiv kehrt im Drop zurück. '
             'Längere Gesangspausen, Platz für Auftakte und Wortenden sowie Tonhöhen und Klangwechsel werden geprüft. '
+            f'Der Wechsel der Begleitung erfolgt nach {handover} Takten der Antwort: '
+            'Harmonischer Anschluss, Gesangsaktivität und Klangwechsel der Instrumente fließen in die Auswahl ein. '
+            'Lange Gesangslücken und starke lokale Tempoverformung werden niedriger bewertet. '
             'Die Analyse versteht weder Textbedeutung noch Sprecheridentität.')
     score_analysis = {name: p['score_analysis'] for name, p in profiles.items() if 'score_analysis' in p}
     if score_analysis:
@@ -323,13 +364,17 @@ def coherent_plan(profiles, fixed_pitch=None, check=lambda: None, target_bpm=Non
         note += f' Tonhöhe unklar: {pitch:+d} und {pitch_ranked[1][1]:+d} Halbtöne bitte vergleichen.'
     return {'sections': sections, 'pitch_b': pitch,
             'target_bpm': suggested,
-            'analysis': {'version': 7, 'score_analysis': score_analysis, 'phrase_bars': count, 'strategy': 'continuous-themes', 'intro': intro,
+            'analysis': {'version': 8, 'score_analysis': score_analysis, 'phrase_bars': count, 'strategy': 'continuous-themes', 'intro': intro,
                          'duration_seconds': round(duration, 2), 'planning_bpm': target, 'duration_policy': 'adaptive-3min',
                          'bpm_a': profiles['A']['bpm'], 'bpm_b': profiles['B']['bpm'],
                          'themes': {'A': [av['start'], av['end']], 'B': [bv['start'], bv['end']]},
                          'transcribed_vocal_coverage': {'A': av['score_vocal_coverage'], 'B': bv['score_vocal_coverage']},
                          'similarity_a_over_b': forward, 'similarity_b_over_a': reverse,
                          'boundary_activity_a': av['cut'], 'boundary_activity_b': bv['cut'],
+                         'backing_handover_bars': handover, 'backing_harmonic_jump': jump,
+                         'backing_structure_cost': structure,
+                         'vocal_flow': {'A': av['vocal_flow'], 'B': bv['vocal_flow']},
+                         'tempo_fit': {'A': av['tempo_fit'], 'B': bv['tempo_fit'], 'backing_B': bed['tempo_fit']},
                          'pitch_candidates': [{'shift': s, 'score': q, 'phrase_bars': n} for q,s,n,_ in pitch_ranked],
                          'internal_structure_change': {'A': av['internal_change'], 'B': bv['internal_change']},
                          'phrase_boundaries': {'A': {'start': av['entry'], 'end': av['release']},
