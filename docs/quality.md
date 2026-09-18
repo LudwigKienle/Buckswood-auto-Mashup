@@ -73,3 +73,22 @@ Version 4 acoustic profiles add harmonic-accompaniment energy and MFCC novelty, 
 Auto tempo remains automatic across planning and resets when changing the song pair. Explicit tempo choices within a pair are preserved. The displayed tempo is sent to rendering. See [the composition research and implementation limits](mashup-composition-research.md), including classical form, thematic transformation, perception and modern mashup research.
 
 The V8 grid check also validates bars against a local nine-bar median and the detector's four-beat count, rather than rejecting every passage outside one global song tempo. Sustained locally regular passages survive a tempo change; missed/doubled bars and non-four-beat detections remain excluded. This does not establish the true meter or repair faulty detections. A compact coherent plan can be preferable to a long forced arrangement.
+
+## Optional C/D themes and full LALAL instrument separation
+
+The optional guest planner adds one continuous 8/16-bar vocal theme per extra
+track over the already-established B backing, with a four-bar instrumental
+lead-in. It keeps the primary intro and A reprise, uses separate pitch choices,
+and penalizes weak phrase boundaries, vocal gaps and local tempo deformation.
+It is not a global four-song arrangement optimizer and does not understand lyrics.
+A poor guest can still reduce coherence; an unsupported vocal passage produces
+an actionable error rather than random jumps or invented repeated syllables.
+
+`lalal_full` uses a separate cache and is never implicitly substituted for other
+providers. Planning and rendering both use its vocals/drums/bass/reconstructed
+other bus. Piano, guitars, synth, strings and wind are also available as individual
+backing selections and source WAV downloads. These independent estimates may
+contain bleed. The whole instrumental is used directly whenever selected; it is
+not rebuilt by adding overlapping instrument estimates. Cloud quality still
+needs a listening comparison on the user's material. Automated tests use a fake
+provider and do not consume paid minutes.

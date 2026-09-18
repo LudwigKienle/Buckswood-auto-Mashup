@@ -201,27 +201,32 @@ def compatibility(voice, harmony, active, voice_shift=0, harmony_shift=0):
     return float(.75*np.mean(matches)+.25*np.quantile(matches, .2))
 
 
-def plan(a, b, progress, cancel, fixed_pitch=None, target_bpm=None, use_score=False, separation_quality='auto'):
+def plan(a, b, progress, cancel, fixed_pitch=None, target_bpm=None, use_score=False, separation_quality='auto', extra_tracks=None):
     from .engine import check_cancel, Cancelled
     from . import score
     scores, warnings = {}, []
+    tracks = {'A': a, 'B': b, **(extra_tracks or {})}
     if use_score:
-        for name, track in [('A', a), ('B', b)]:
+        for i, (name, track) in enumerate(tracks.items()):
             try:
-                offset = 0 if name == 'A' else 35
-                scores[name] = score.ensure(track, lambda p, m: progress(round(offset+p*.35), m), cancel)
+                offset = i*70/len(tracks)
+                scores[name] = score.ensure(track, lambda p, m: progress(round(offset+p*.7/len(tracks)), m), cancel)
             except Cancelled:
                 raise
             except (OSError, ValueError, RuntimeError) as exc:
                 warnings.append(f'Track {name}: {exc}')
     profiles = {}
     lower = 70 if use_score else 0
-    span = (95-lower)/2
-    for i, (name, track) in enumerate([('A', a), ('B', b)]):
+    span = (95-lower)/len(tracks)
+    for i, (name, track) in enumerate(tracks.items()):
         profiles[name] = profile(track, lambda p, m: progress(round(lower+i*span+p*span/100), m), cancel, separation_quality=separation_quality)
     progress(96, 'Passende zusammenhängende Themen vergleichen')
     profiles = {name: score.enrich(value, scores.get(name)) for name, value in profiles.items()}
-    result = coherent_plan(profiles, fixed_pitch, lambda: check_cancel(cancel), target_bpm)
+    result = coherent_plan({k: profiles[k] for k in ('A', 'B')}, fixed_pitch, lambda: check_cancel(cancel), target_bpm)
+    if extra_tracks:
+        from .multitrack import add_themes
+        result = add_themes(result, profiles, lambda: check_cancel(cancel))
+        result['analysis']['score_analysis'] = {k:p['score_analysis'] for k,p in profiles.items() if 'score_analysis' in p}
     result['analysis']['score_requested'] = use_score
     result['analysis']['score_warnings'] = warnings
     if warnings:

@@ -152,3 +152,31 @@ Tests mock the API and use synthetic audio; no live paid request is part of the 
 Accompaniment handovers are compared at musical bar boundaries while keeping the response vocal continuous. The planner also considers local tempo deformation, delayed vocal entries, long internal vocal gaps and accompaniment changes. Intros use harmonic accompaniment energy even without drums. Auto tempo stays automatic and resets when switching songs; manual tempo remains available for the current pair.
 
 The [composition research report](docs/mashup-composition-research.md) connects classical form, thematic transformation, perception research and automatic mashup literature to the implemented heuristics and their limits. It is in German and distinguishes implemented changes from future experiments. No additional paid service is required.
+
+### Optional: three or four songs and all LALAL instruments
+
+Use **Weiteren Song hinzufügen** for optional tracks C/D. The musical planner keeps
+A/B as the main form, inserts continuous 8/16-bar guest vocal themes over B's
+established accompaniment, then returns to A. Each guest has its own entry, tempo
+and pitch correction. Manual arrangements can also use C/D as the backing source.
+This is acoustic matching, not lyric or semantic understanding; more songs can
+make the arrangement longer and are not a guarantee of a better mix.
+
+The LALAL panel offers **Alle Instrumente**: vocals, drums, bass, piano, electric
+and acoustic guitar, synthesizer, strings and wind. A quote covers all selected
+songs and binds approval to the exact mode and source files. Nine new extractions
+cost up to nine times song duration in processing minutes (eight when the existing
+LALAL vocal/instrumental pair can be reused). No paid call is made by planning or
+rendering. The old vocal-only + local Demucs option remains available.
+
+The full mode uses LALAL's single-stem endpoint: the documented multistem endpoint
+supports only six categories; synth/strings/wind require Phoenix. Per-instrument
+task IDs and uncertain submissions are persisted so retries cannot silently
+rebill a completed or ambiguous task. Downloaded stems are validated against the
+original sample rate, channels and frame count. Full results have a separate
+cache, per-instrument audition, a WAV ZIP, and an instrument selector in the
+arrangement's fine adjustments. `other` is a reconstruction residual
+(`instrumental - drums - bass`), not another AI extraction. Individual instrument
+estimates can overlap and are not all stacked on top of the full instrumental.
+
+API reference: <https://www.lalal.ai/api/v1/openapi.json>

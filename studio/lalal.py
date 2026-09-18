@@ -15,6 +15,7 @@ from .storage import DATA, TRACKS, read_track, save_json
 
 API = 'https://www.lalal.ai/api/v1/'
 FOLDER = 'stems-lalal-v1'
+FULL_FOLDER = 'stems-lalal-all-v1'
 PRESETS = {'stem': 'vocals', 'encoder_format': 'wav', 'dereverb_enabled': False,
            'extraction_level': 'clear_cut'}
 KEY_FILE = DATA/'credentials/lalal.key'
@@ -50,11 +51,13 @@ def fingerprint(track):
     return {'id': track['id'], 'bytes': s.st_size, 'mtime_ns': s.st_mtime_ns}
 
 
-def ready(track):
-    folder = TRACKS/track['id']/FOLDER
+def ready(track, mode='vocals'):
+    folder = TRACKS/track['id']/(FULL_FOLDER if mode == 'all' else FOLDER)
+    from .lalal_full import STEMS
+    required = (*STEMS, 'instrumental', 'other') if mode == 'all' else ('vocals','drums','bass','other')
     try:
         meta = json.loads((folder/'separation.json').read_text())
-        return meta.get('source') == fingerprint(track) and all((folder/f'{s}.wav').is_file() for s in ('vocals','drums','bass','other'))
+        return meta.get('source') == fingerprint(track) and all((folder/f'{s}.wav').is_file() for s in required)
     except (OSError, ValueError):
         return False
 
@@ -223,11 +226,11 @@ def separate(track, progress, cancel):
         raise
 
 
-def validate_audio(stage, source):
+def validate_audio(stage, source, names=('vocals','instrumental')):
     import numpy as np
     import soundfile as sf
     original = sf.info(source)
-    for name in ('vocals','instrumental'):
+    for name in names:
         audio, sr = sf.read(stage/f'{name}.wav', dtype='float32', always_2d=True)
         if sr != original.samplerate or audio.shape != (original.frames, original.channels) or not np.isfinite(audio).all():
             raise ValueError('LALAL.AI-Spuren passen nicht zur Länge, Kanalzahl oder Samplerate des Originals.')

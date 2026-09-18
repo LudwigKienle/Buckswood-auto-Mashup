@@ -308,7 +308,7 @@ def vocal_runs(sections, timing):
 
 
 def backing_components(section):
-    return (('B', 'drums'), ('A', 'harmony')) if section.instrumental == 'hybrid' else ((section.instrumental, 'instrumental'),)
+    return (('B', 'drums'), ('A', 'harmony')) if section.instrumental == 'hybrid' else ((section.instrumental, section.backing_stem),)
 
 
 def backing_runs(sections, timing):
@@ -333,19 +333,24 @@ def backing_runs(sections, timing):
     return runs
 
 def render(request, job_id, progress, cancel):
-    a, b = read_track(request.track_a), read_track(request.track_b)
-    tracks = {'A': a, 'B': b}
-    bpms = {'A': request.bpm_a or a['bpm'], 'B': request.bpm_b or b['bpm']}
+    tracks = {name: read_track(id) for name, id in request.track_ids().items()}
+    a, b = tracks['A'], tracks['B']
+    manual_bpms = {name: getattr(request, 'bpm_'+name.lower()) for name in tracks}
+    bpms = {name: manual_bpms[name] or track['bpm'] for name, track in tracks.items()}
     target = request.target_bpm or round(np.sqrt(bpms['A']*bpms['B']), 1)
     for source, bpm in bpms.items():
         if not .5 <= target/bpm <= 2:
             raise ValueError(f'Tempo von Track {source} und Ziel liegen zu weit auseinander. BPM-Prüfung nötig.')
     pitch = request.pitch_b if request.pitch_b is not None else (semitones_between_keys(b['key'], a['key']) if request.key_match else 0)
+    pitches = {'A': 0, 'B': pitch}
+    for name in tracks.keys()-{'A', 'B'}:
+        explicit = getattr(request, 'pitch_'+name.lower())
+        pitches[name] = explicit if explicit is not None else (semitones_between_keys(tracks[name]['key'], a['key']) if request.key_match else 0)
     from .separation import selected_backend, stems_folder
     backends = {name: selected_backend(track, request.separation_quality) for name,track in tracks.items()}
     for i, (name, track) in enumerate(tracks.items()):
         if backends[name] == 'standard':
-            separate(track, lambda _, msg: progress(5+i*20, msg), cancel)
+            separate(track, lambda _, msg: progress(5+round(i*35/len(tracks)), msg), cancel)
     folder = EXPORTS / job_id
     folder.mkdir(exist_ok=True)
     sections = request.sections
@@ -370,12 +375,13 @@ def render(request, job_id, progress, cancel):
         voice_gains[name] = float(np.clip(.078/max(level, 1e-6), .5, 1.8))
         del voice
     warnings = ['Beat-Eins und Abschnittsgrenzen sind Schätzungen; Gesangsphrasen bitte nach Gehör prüfen.']
-    if abs(pitch) > 3:
-        warnings.append(f'Track B wird um {pitch:+g} Halbtöne verändert; dabei können hörbare Artefakte entstehen.')
+    for name, shift in pitches.items():
+        if abs(shift) > 3:
+            warnings.append(f'Track {name} wird um {shift:+g} Halbtöne verändert; dabei können hörbare Artefakte entstehen.')
     elapsed = 0.
     def source_timing(section, source):
-        begin, end, _, _ = clip_timing(tracks[source], section.start_a if source=='A' else section.start_b,
-                                       section.bars, bpms[source], bool(request.bpm_a if source=='A' else request.bpm_b))
+        begin, end, _, _ = clip_timing(tracks[source], getattr(section, 'start_'+source.lower()),
+                                       section.bars, bpms[source], bool(manual_bpms[source]))
         return begin, end
     runs = vocal_runs(sections, lambda section: source_timing(section, section.vocal))
     beds = backing_runs(sections, source_timing)
@@ -388,7 +394,7 @@ def render(request, job_id, progress, cancel):
         def clip(source, stem):
             first_index, count, preceding = beds[i, source, stem]
             first = sections[first_index]
-            start = first.start_a if source == 'A' else first.start_b
+            start = getattr(first, 'start_'+source.lower())
             intro_bars = 0
             for following in sections[first_index:]:
                 if following.effect != 'intro' or intro_bars >= count:
@@ -397,8 +403,8 @@ def render(request, job_id, progress, cancel):
             key = (source, stem, start, count, intro_bars)
             if key not in bed_cache:
                 bed_cache[key] = source_clip(tracks[source], stem, start, count, bpms[source], target,
-                    pitch if source == 'B' else 0, cancel,
-                    manual=bool(request.bpm_a if source=='A' else request.bpm_b), tail_seconds=.18,
+                    pitches[source], cancel,
+                    manual=bool(manual_bpms[source]), tail_seconds=.18,
                     quality=backends[source], intro_bars=intro_bars)*gains[source]
             offset = round(preceding*240/target*SR)
             return fit(bed_cache[key][offset:offset+length+tail_length].copy(), length+tail_length)
@@ -409,11 +415,11 @@ def render(request, job_id, progress, cancel):
             run_start, run_bars, preceding_bars = runs[i]
             first = sections[run_start]
             source = section.vocal
-            start = first.start_a if source=='A' else first.start_b
+            start = getattr(first, 'start_'+source.lower())
             key = (source, start, run_bars)
             if key not in voice_cache:
                 voice_cache[key] = source_clip(tracks[source], 'vocals', start, run_bars, bpms[source], target,
-                    pitch if source=='B' else 0, cancel, manual=bool(request.bpm_a if source=='A' else request.bpm_b),
+                    pitches[source], cancel, manual=bool(manual_bpms[source]),
                     tail_seconds=context_seconds, quality=backends[source], head_seconds=head_length/SR) * gains[source]
             offset = head_length+round(preceding_bars*240/target*SR)
             head = voice_cache[key][offset-head_length:offset].copy()
@@ -431,13 +437,13 @@ def render(request, job_id, progress, cancel):
         bed_parts.append(bed)
         timing = {}
         for source, track in tracks.items():
-            used = section.vocal==source or section.instrumental in (source, 'hybrid')
+            used = section.vocal==source or any(s == source for s, _ in backing_components(section))
             if not used:
                 timing[source] = (None, None, None, None)
                 continue
-            start = section.start_a if source=='A' else section.start_b
+            start = getattr(section, 'start_'+source.lower())
             begin, end, _, grid = clip_timing(track, start, section.bars, bpms[source],
-                                             bool(request.bpm_a if source=='A' else request.bpm_b))
+                                             bool(manual_bpms[source]))
             tempo = section.bars*240/(end-begin)
             timing[source] = begin, end, tempo, grid
             if abs(target/tempo-1)>.2:
@@ -475,8 +481,8 @@ def render(request, job_id, progress, cancel):
                '-ar', str(SR), '-c:a', 'pcm_s24le', str(folder/'mashup.wav')])
     run_audio(['ffmpeg', '-v', 'error', '-y', '-i', str(folder/'mashup.wav'), '-c:a', 'libmp3lame', '-b:a', '320k', str(folder/'mashup.mp3')])
     check_cancel(cancel)
-    result = {'id': job_id, 'name': ('Anfang · V6' if request.preview else 'Arrangement · V6')+(' · LALAL.AI' if all(v=='lalal' for v in backends.values()) else ' · RoFormer' if all(v=='hq' for v in backends.values()) else ' · Demucs' if all(v=='standard' for v in backends.values()) else ' · gemischte Stems'), 'duration': round(elapsed, 2),
-              'bpm': target, 'pitch_b': pitch, 'engine_version': 6, 'separation': backends, 'track_a': a['name'], 'track_b': b['name'], 'sections': report,
+    result = {'id': job_id, 'name': ('Anfang · V6' if request.preview else 'Arrangement · V6')+(' · LALAL.AI alle Instrumente' if all(v=='lalal_full' for v in backends.values()) else ' · LALAL.AI' if all(v=='lalal' for v in backends.values()) else ' · RoFormer' if all(v=='hq' for v in backends.values()) else ' · Demucs' if all(v=='standard' for v in backends.values()) else ' · gemischte Stems'), 'duration': round(elapsed, 2),
+              'bpm': target, 'pitch_b': pitch, 'pitches': pitches, 'tracks': {name: track['name'] for name, track in tracks.items()}, 'engine_version': 6, 'separation': backends, 'track_a': a['name'], 'track_b': b['name'], 'sections': report,
               'warnings': warnings, 'request': request.model_dump(), 'mastering': {'target_lufs': -14, 'target_true_peak_db': -1.2},
               'processing': {'backing': 'sum-before-stretch; continuous source runs', 'pitch': 'Rubber Band high quality',
                              'mix': 'continuous EQ; zero-phase midrange duck; 180 ms release', 'grid_jitter_tolerance_ms': 12,

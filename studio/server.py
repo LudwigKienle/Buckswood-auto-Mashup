@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .storage import ROOT, DATA, TRACKS, EXPORTS, JOBS, list_tracks, read_track, save_json
-from .models import RenderRequest, PairRequest, LalalKeyRequest, LalalStartRequest
+from .models import RenderRequest, PairRequest, LalalKeyRequest, LalalStartRequest, LalalQuoteRequest
 
 app = FastAPI(title='Buckswood auto Mashup', version='0.1.0')
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
@@ -78,11 +78,11 @@ def state():
     exports = [json.loads(p.read_text()) for p in sorted(EXPORTS.glob('*/arrangement.json'), key=lambda p: p.stat().st_mtime, reverse=True)]
     defaults=json.loads((DATA/'project.json').read_text()) if (DATA/'project.json').exists() else {}
     from . import score, lalal
-    return {'lalal_configured': lalal.configured(), 'lalal_ready': [t['id'] for t in list_tracks() if lalal.ready(t)], 'score_installed': score.installed(), 'score_ready': [t['id'] for t in list_tracks() if score.cached(t)], 'token': token, 'tracks': list_tracks(), 'exports': exports, 'jobs': list(jobs.values()), 'data_dir': str(DATA), 'defaults':defaults, 'hq_installed': __import__('studio.separation', fromlist=['installed']).installed()}
+    return {'lalal_full_ready': [t['id'] for t in list_tracks() if lalal.ready(t, 'all')], 'lalal_configured': lalal.configured(), 'lalal_ready': [t['id'] for t in list_tracks() if lalal.ready(t)], 'score_installed': score.installed(), 'score_ready': [t['id'] for t in list_tracks() if score.cached(t)], 'token': token, 'tracks': list_tracks(), 'exports': exports, 'jobs': list(jobs.values()), 'data_dir': str(DATA), 'defaults':defaults, 'hq_installed': __import__('studio.separation', fromlist=['installed']).installed()}
 
 @app.get('/api/health')
 def health():
-    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 7, 'planner_version': 8}
+    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 7, 'planner_version': 9, 'max_tracks': 4, 'lalal_all_instruments': True}
 
 @app.post('/api/upload')
 async def upload(file: UploadFile):
@@ -117,14 +117,20 @@ def plan(pair: PairRequest):
         a, b = read_track(pair.track_a), read_track(pair.track_b)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    from .multitrack import simple_plan
+    try:
+        tracks = {name: read_track(id) for name, id in pair.track_ids().items()}
+        sections = simple_plan(tracks)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     save_json(DATA/'project.json',pair.model_dump())
-    return {'sections': auto_plan(a, b), 'target_bpm': round((a['bpm']+b['bpm'])/2, 1)}
+    return {'sections': sections, 'target_bpm': round((a['bpm']+b['bpm'])/2, 1)}
 
 @app.post('/api/render')
 def start_render(request: RenderRequest):
     from .engine import render
     try:
-        for track_id in (request.track_a, request.track_b):
+        for track_id in request.track_ids().values():
             read_track(track_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
@@ -134,9 +140,9 @@ def start_render(request: RenderRequest):
 def intro_plan(request: RenderRequest):
     from .intro import rebuild_intro
     try:
-        tracks = {'A': read_track(request.track_a), 'B': read_track(request.track_b)}
+        tracks = {name: read_track(id) for name, id in request.track_ids().items()}
         return rebuild_intro(tracks, [s.model_dump() for s in request.sections],
-                             {'A': request.bpm_a, 'B': request.bpm_b})
+                             {name: getattr(request, 'bpm_'+name.lower()) for name in tracks})
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -144,24 +150,25 @@ def intro_plan(request: RenderRequest):
 def quality_plan(pair: PairRequest):
     from .quality import plan
     try:
-        a, b = read_track(pair.track_a), read_track(pair.track_b)
+        tracks = {name: read_track(id) for name, id in pair.track_ids().items()}
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     def work(job_id, progress, cancel):
         from .separation import installed, separate_hq
         if pair.separation_quality in ('auto', 'hq') and installed():
-            current = []
-            for i, track in enumerate((a,b)):
-                current.append(separate_hq(track, lambda p,m: progress(round(i*20+p*.2),m), cancel))
-            return plan(*current, lambda p,m: progress(round(40+p*.6),m), cancel, target_bpm=pair.target_bpm, use_score=pair.use_score, separation_quality=pair.separation_quality)
-        return plan(a, b, progress, cancel, target_bpm=pair.target_bpm, use_score=pair.use_score, separation_quality=pair.separation_quality)
+            for i, (name, track) in enumerate(tracks.items()):
+                tracks[name] = separate_hq(track, lambda p,m: progress(round((i+p/100)*40/len(tracks)),m), cancel)
+        options = dict(target_bpm=pair.target_bpm, use_score=pair.use_score, separation_quality=pair.separation_quality)
+        if len(tracks) > 2:
+            options['extra_tracks'] = {k:v for k,v in tracks.items() if k not in ('A','B')}
+        return plan(tracks['A'], tracks['B'], lambda p,m: progress(round(40+p*.6),m), cancel, **options)
     return submit('plan', work)
 
 @app.post('/api/separate-hq')
 def separate_pair(pair: PairRequest):
     from .separation import separate_hq
     try:
-        tracks = [read_track(t) for t in dict.fromkeys((pair.track_a, pair.track_b))]
+        tracks = [read_track(t) for t in dict.fromkeys(pair.track_ids().values())]
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     def work(job_id, progress, cancel):
@@ -190,11 +197,13 @@ def lalal_disconnect():
     return {'configured': lalal.configured()}
 
 @app.post('/api/lalal/quote')
-def lalal_quote(pair: PairRequest):
-    from . import lalal
+def lalal_quote(pair: LalalQuoteRequest):
+    from . import lalal, lalal_full
+    provider = lalal_full if pair.mode == 'all' else lalal
     try:
-        tracks = [read_track(t) for t in dict.fromkeys((pair.track_a, pair.track_b))]
-        estimate = lalal.estimate(tracks)
+        tracks = [read_track(t) for t in dict.fromkeys(pair.track_ids().values())]
+        estimate = provider.estimate(tracks)
+        estimate['mode'] = pair.mode
         estimate['minutes_left'] = lalal.Client().minutes()
         estimate['can_start'] = estimate['minutes_left'] >= estimate['estimated_minutes']
         quote_id = secrets.token_urlsafe(24)
@@ -202,7 +211,7 @@ def lalal_quote(pair: PairRequest):
             for old in list(lalal_quotes):
                 if lalal_quotes[old]['expires'] < time.monotonic():
                     del lalal_quotes[old]
-            lalal_quotes[quote_id] = {'tracks': tracks, 'sources': [lalal.fingerprint(t) for t in tracks],
+            lalal_quotes[quote_id] = {'mode': pair.mode, 'tracks': tracks, 'sources': [lalal.fingerprint(t) for t in tracks],
                                      'expires': time.monotonic()+600, 'job_id': None}
         return {**estimate, 'quote_id': quote_id}
     except ValueError as exc:
@@ -210,7 +219,7 @@ def lalal_quote(pair: PairRequest):
 
 @app.post('/api/lalal/separate')
 def lalal_separate(request: LalalStartRequest):
-    from . import lalal
+    from . import lalal, lalal_full
     with lock:
         quote = lalal_quotes.get(request.quote_id)
         if not quote or quote['expires'] < time.monotonic():
@@ -220,16 +229,18 @@ def lalal_separate(request: LalalStartRequest):
         if any(j['status'] in ('queued', 'running') for j in jobs.values()):
             raise HTTPException(409, 'Bitte den laufenden Auftrag zuerst beenden.')
         tracks = quote['tracks']
+        mode = quote.get('mode', 'vocals')
+        provider = lalal_full if mode == 'all' else lalal
         if quote['sources'] != [lalal.fingerprint(t) for t in tracks]:
             raise HTTPException(409, 'Songs wurden geändert. Bitte die Minuten neu prüfen.')
         def work(job_id, progress, cancel):
-            needed = lalal.estimate(tracks)['estimated_minutes']
+            needed = provider.estimate(tracks)['estimated_minutes']
             if needed and lalal.Client().minutes() < needed:
                 raise ValueError('Das LALAL.AI-Guthaben reicht für diese Songs nicht aus. Es wurde nichts hochgeladen.')
             result = []
             for i, track in enumerate(tracks):
-                result.append(lalal.separate(track, lambda p,m: progress(round((i*100+p)/len(tracks)),m), cancel))
-            return {'tracks': result, 'provider': 'lalal'}
+                result.append(provider.separate(track, lambda p,m: progress(round((i*100+p)/len(tracks)),m), cancel))
+            return {'tracks': result, 'provider': 'lalal_full' if mode == 'all' else 'lalal'}
         job = submit('separation-lalal', work)
         quote['job_id'] = job['id']
         return job
@@ -257,12 +268,12 @@ def track_audio(track_id: str):
     return FileResponse(TRACKS/track_id/'audio.wav', media_type='audio/wav')
 
 @app.get('/api/tracks/{track_id}/stems/{stem}')
-def stem_audio(track_id: str, stem: str, quality: Literal["auto", "standard", "hq", "lalal"] = "auto"):
+def stem_audio(track_id: str, stem: str, quality: Literal["auto", "standard", "hq", "lalal", "lalal_full"] = "auto"):
     try:
         read_track(track_id)
     except ValueError:
         raise HTTPException(404)
-    if stem not in {'vocals', 'drums', 'bass', 'other'}:
+    if stem not in {'vocals', 'drums', 'bass', 'other', 'instrumental', 'piano', 'electric_guitar', 'acoustic_guitar', 'synthesizer', 'strings', 'wind'}:
         raise HTTPException(404)
     from .separation import stems_folder
     try:
@@ -272,6 +283,18 @@ def stem_audio(track_id: str, stem: str, quality: Literal["auto", "standard", "h
     if not path.exists():
         raise HTTPException(404, 'Stems werden beim ersten Rendern erstellt.')
     return FileResponse(path, media_type='audio/wav')
+
+@app.get('/api/tracks/{track_id}/instruments.zip')
+def instrument_download(track_id: str):
+    from . import lalal
+    try:
+        track = read_track(track_id)
+        if not lalal.ready(track, 'all'):
+            raise ValueError('Alle Instrumente sind noch nicht getrennt.')
+        return FileResponse(TRACKS/track_id/lalal.FULL_FOLDER/'instruments.zip',
+                            media_type='application/zip', filename='lalal-instruments.zip')
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
 
 @app.get('/api/exports/{export_id}/{filename}')
 def export_file(export_id: str, filename: str):

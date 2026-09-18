@@ -14,3 +14,5 @@
 .arrangement-foot{flex-wrap:wrap}.arrangement-foot p{flex:1;min-width:220px}
 
 .lalal-panel{margin:24px 0;padding:24px}.lalal-panel p{line-height:1.6}.paid-badge{font-size:12px;font-weight:500;border:1px solid currentColor;border-radius:20px;padding:5px 9px;vertical-align:middle}.lalal-controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:16px}.lalal-controls label{display:flex;flex-direction:column;gap:6px}.lalal-confirm{border:1px solid #787b88;border-radius:12px;padding:20px;margin-top:20px}.lalal-confirm button{margin:8px 12px 0 0}.lalal-confirm li{margin-bottom:10px}
+
+.extra-controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:16px}.extra-controls p{width:100%;font-size:13px}.track-C h2,.track-C a{color:#ccacff}.track-C .wave line{stroke:#ccacff}.track-D h2,.track-D a{color:#e8c66b}.track-D .wave line{stroke:#e8c66b}.color-C{background:#514061}.color-D{background:#625637}.dot-C{background:#ccacff}.dot-D{background:#e8c66b}

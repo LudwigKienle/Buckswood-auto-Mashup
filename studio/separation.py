@@ -27,20 +27,20 @@ def installed():
 
 
 def selected_backend(track, quality='auto'):
-    if quality == 'lalal':
+    if quality in ('lalal', 'lalal_full'):
         from .lalal import ready as lalal_ready
-        if not lalal_ready(track):
-            raise ValueError('Bitte zuerst LALAL.AI-Stems für beide Songs erstellen.')
-        return 'lalal'
+        if not lalal_ready(track, 'all' if quality == 'lalal_full' else 'vocals'):
+            raise ValueError('Bitte zuerst LALAL.AI-Stems für alle ausgewählten Songs erstellen.')
+        return quality
     if quality == 'hq' and not ready(track):
-        raise ValueError('Bitte zuerst die neue Vocal-Trennung für beide Songs erstellen.')
+        raise ValueError('Bitte zuerst die neue Vocal-Trennung für alle ausgewählten Songs erstellen.')
     return 'hq' if quality != 'standard' and ready(track) else 'standard'
 
 
 def stems_folder(track, quality='auto'):
     backend = selected_backend(track, quality)
-    from .lalal import FOLDER
-    return TRACKS/track['id']/({'hq':HQ_FOLDER, 'lalal':FOLDER}.get(backend, 'stems'))
+    from .lalal import FOLDER, FULL_FOLDER
+    return TRACKS/track['id']/({'hq':HQ_FOLDER, 'lalal':FOLDER, 'lalal_full':FULL_FOLDER}.get(backend, 'stems'))
 
 
 def worker_progress(text):
