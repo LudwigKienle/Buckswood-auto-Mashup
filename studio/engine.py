@@ -309,7 +309,18 @@ def vocal_runs(sections, timing):
 
 def backing_components(section):
     if section.instrument_sources:
-        return tuple((source, stem) for stem, source in section.instrument_sources.items() if source != 'off')
+        routing = section.instrument_sources
+        # Keep correlated stems together through ONE stretch operation whenever
+        # possible. ``other`` is a subtraction residual; independent warps can
+        # otherwise bring drum/bass leakage back into the mix.
+        core = ('drums', 'bass', 'other')
+        if all(routing.get(stem) not in (None, 'off') and section.instrument_levels_db.get(stem, 0) == 0 for stem in core):
+            if len({routing[stem] for stem in core}) == 1:
+                source = routing['drums']
+                return ((source, 'instrumental'),) + tuple((s, stem) for stem,s in routing.items() if stem not in core and s != 'off')
+            if routing['bass'] == routing['other']:
+                return ((routing['drums'], 'drums'), (routing['bass'], 'harmony')) + tuple((s, stem) for stem,s in routing.items() if stem not in core and s != 'off')
+        return tuple((source, stem) for stem, source in routing.items() if source != 'off')
     return (('B', 'drums'), ('A', 'harmony')) if section.instrumental == 'hybrid' else ((section.instrumental, section.backing_stem),)
 
 
@@ -475,6 +486,8 @@ def render(request, job_id, progress, cancel):
         elapsed += length/SR
     continuations = [False]+[i in runs and runs[i][0] != i for i in range(1, len(sections))]
     bed_continuations = [False]+[backing_components(sections[i-1]) == backing_components(sections[i]) and
+        sections[i-1].instrument_levels_db == sections[i].instrument_levels_db and
+        sections[i-1].instrumental_db == sections[i].instrumental_db and
         all(beds[i, source, stem][0] != i for source, stem in backing_components(sections[i]))
         for i in range(1, len(sections))]
     vocal_edits = []

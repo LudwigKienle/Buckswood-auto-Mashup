@@ -13,6 +13,8 @@ def test_individual_sources_are_validated_and_routed():
         'drums': 'B', 'bass': 'A', 'piano': 'A', 'strings': 'off'},
         instrument_levels_db={'piano': -12})
     assert backing_components(section) == (('B', 'drums'), ('A', 'bass'), ('A', 'piano'))
+    assert backing_components(Section(name='Core',instrument_sources={'drums':'B','bass':'B','other':'B','piano':'A'})) == (('B','instrumental'),('A','piano'))
+    assert backing_components(Section(name='Hybrid',instrument_sources={'drums':'B','bass':'A','other':'A'})) == (('B','drums'),('A','harmony'))
     sections = [section, section.model_copy(update={'name': 'Drop 2', 'start_a': 16, 'start_b': 16})]
     runs = backing_runs(sections, lambda s, source: (getattr(s, 'start_'+source.lower()), getattr(s, 'start_'+source.lower())+16))
     assert runs[1, 'A', 'piano'] == (0, 16, 8)
