@@ -82,7 +82,7 @@ def state():
 
 @app.get('/api/health')
 def health():
-    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 7, 'planner_version': 9, 'max_tracks': 4, 'lalal_all_instruments': True}
+    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 7, 'planner_version': 10, 'max_tracks': 4, 'lalal_all_instruments': True, 'individual_instrument_arrangement': True}
 
 @app.post('/api/upload')
 async def upload(file: UploadFile):
@@ -121,6 +121,12 @@ def plan(pair: PairRequest):
     try:
         tracks = {name: read_track(id) for name, id in pair.track_ids().items()}
         sections = simple_plan(tracks)
+        if pair.separation_quality == 'lalal_full':
+            from .separation import selected_backend
+            from .instrument_arrangement import suggest_instruments
+            for track in tracks.values():
+                selected_backend(track, 'lalal_full')
+            suggest_instruments(sections, tracks)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     save_json(DATA/'project.json',pair.model_dump())
@@ -135,6 +141,21 @@ def start_render(request: RenderRequest):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return submit('render', lambda job_id, progress, cancel: render(request, job_id, progress, cancel))
+
+@app.post('/api/instrument-plan')
+def instrument_plan(request: RenderRequest):
+    if request.separation_quality != 'lalal_full':
+        raise HTTPException(400, 'Instrumentenplanung benötigt LALAL.AI · alle Instrumente.')
+    from .separation import selected_backend
+    from .instrument_arrangement import suggest_instruments
+    try:
+        tracks = {name: read_track(id) for name, id in request.track_ids().items()}
+        for track in tracks.values():
+            selected_backend(track, 'lalal_full')
+        sections = [section.model_dump() for section in request.sections]
+        return {'sections': suggest_instruments(sections, tracks)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 @app.post('/api/intro-plan')
 def intro_plan(request: RenderRequest):
@@ -161,7 +182,12 @@ def quality_plan(pair: PairRequest):
         options = dict(target_bpm=pair.target_bpm, use_score=pair.use_score, separation_quality=pair.separation_quality)
         if len(tracks) > 2:
             options['extra_tracks'] = {k:v for k,v in tracks.items() if k not in ('A','B')}
-        return plan(tracks['A'], tracks['B'], lambda p,m: progress(round(40+p*.6),m), cancel, **options)
+        result = plan(tracks['A'], tracks['B'], lambda p,m: progress(round(40+p*.6),m), cancel, **options)
+        if pair.separation_quality == 'lalal_full':
+            from .instrument_arrangement import suggest_instruments
+            suggest_instruments(result['sections'], tracks)
+            result['analysis']['note'] += ' LALAL-Instrumente sind einzeln geplant; leise Akzente lassen sich pro Abschnitt ändern.'
+        return result
     return submit('plan', work)
 
 @app.post('/api/separate-hq')

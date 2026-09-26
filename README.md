@@ -136,7 +136,7 @@ LALAL.AI is an optional external provider, not included in the app. Bring your o
 
 1. Open **LALAL.AI · Optional · kostenpflichtig**, expand **API-Key verbinden**, and save your API key. This checks the balance without uploading audio.
 2. Select your two songs and click **Songs & Minuten prüfen**. The confirmation lists exact song names, estimated new processing minutes, cached results and resumable tasks. Selecting the same song twice only processes it once.
-3. Click **Upload & kostenpflichtige Trennung starten** to authorize those uploads and one vocal separation per song. LALAL.AI supplies lossless vocals and instrumental; Demucs splits drums and bass locally and the remaining instrumental is reconstructed by subtraction. No paid multi-stem or dereverb requests are made.
+3. In **Nur Gesang + Begleitung** mode, click **Upload & kostenpflichtige Trennung starten** to authorize those uploads and one vocal separation per song. LALAL.AI supplies lossless vocals and instrumental; Demucs splits drums and bass locally and the remaining instrumental is reconstructed by subtraction. The separate **Alle Instrumente** mode quotes additional paid stems before any upload.
 4. After completion, **LALAL.AI · gespeicherte Stems** is selected for the mix. Musical planning uses the selected stems too. Listen to **Gesang · LALAL.AI** in each track's solo menu and compare with local separation. Rendering and replanning use the saved files without new API charges. **Lokale Stems · automatisch** always remains local.
 
 The key is stored outside the repository at `credentials/lalal.key` under the app's data folder, with file permissions 0600; it is never returned by the state API or stored in browser storage. A server-side `LALAL_API_KEY` environment variable is also supported; a saved key takes precedence. Removing the saved key does not remove an environment variable. The default TLS certificate validation remains enabled.
@@ -174,9 +174,16 @@ supports only six categories; synth/strings/wind require Phoenix. Per-instrument
 task IDs and uncertain submissions are persisted so retries cannot silently
 rebill a completed or ambiguous task. Downloaded stems are validated against the
 original sample rate, channels and frame count. Full results have a separate
-cache, per-instrument audition, a WAV ZIP, and an instrument selector in the
-arrangement's fine adjustments. `other` is a reconstruction residual
-(`instrumental - drums - bass`), not another AI extraction. Individual instrument
-estimates can overlap and are not all stacked on top of the full instrumental.
+cache, per-instrument audition, and a WAV ZIP. Choose **LALAL.AI · alle Instrumente**
+for the mix, then expand **Einzelinstrumente pro Abschnitt planen**. Each section
+can route drums, bass, piano, guitars, synth, strings, wind and the remaining
+backing independently from A–D or switch a stem off. **Instrumente automatisch
+verteilen** keeps a stable rhythm and accompaniment, adding at most one quiet
+cross-song motif where a cached stem is active. Each choice and its level can be
+edited before rendering; planning and rendering make no paid API requests.
+`other` is a reconstruction residual (`instrumental - drums - bass`), not another
+AI extraction. It still contains melodic instruments, so adding an individual
+stem from the same song on top can double it. The automatic plan avoids that;
+the editor leaves deliberate layering to the user.
 
 API reference: <https://www.lalal.ai/api/v1/openapi.json>

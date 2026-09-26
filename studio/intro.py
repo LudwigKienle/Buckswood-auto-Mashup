@@ -78,7 +78,11 @@ def rebuild_intro(tracks, sections, bpms=None):
     if len(remaining) >= 16:
         raise ValueError('Für das Intro ist ein freier Abschnitt nötig (höchstens 16 insgesamt).')
     first = remaining[0]
-    sources = ('A', 'B') if first['instrumental'] == 'hybrid' else (first['instrumental'],)
+    sources = (tuple(dict.fromkeys(s for s in first.get('instrument_sources', {}).values() if s != 'off'))
+               if first.get('instrument_sources') else
+               ('A', 'B') if first['instrumental'] == 'hybrid' else (first['instrumental'],))
+    if not sources:
+        sources = (first['instrumental'] if first['instrumental'] != 'hybrid' else 'B',)
     bpms = bpms or {}
     leads = {s:lead_in(tracks[s], first['start_'+s.lower()], manual_bpm=bpms.get(s)) for s in sources}
     count = min(v['bars'] for v in leads.values())
