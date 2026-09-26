@@ -186,4 +186,13 @@ AI extraction. It still contains melodic instruments, so adding an individual
 stem from the same song on top can double it. The automatic plan avoids that;
 the editor leaves deliberate layering to the user.
 
+**LALAL.AI + lokale Stems · einzelne Instrumente** also works when only one of
+the selected songs has all LALAL stems. That song contributes its cached melodic
+instruments; songs without them use cached LALAL vocals when available, then
+local RoFormer or Demucs stems. The editor disables melodic choices from those
+songs, and the renderer
+rejects unsupported routing instead of silently substituting another stem.
+Selecting this mode never sends audio to LALAL.AI. A new paid separation still
+requires the explicit quote and upload confirmation in the LALAL panel.
+
 API reference: <https://www.lalal.ai/api/v1/openapi.json>

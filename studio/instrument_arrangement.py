@@ -14,6 +14,23 @@ from .lalal import FULL_FOLDER
 MELODIC = ('piano', 'electric_guitar', 'acoustic_guitar', 'synthesizer', 'strings', 'wind')
 
 
+def available_backends(tracks, quality):
+    """Select local fallbacks without starting a paid or local separation job."""
+    from .separation import selected_backend
+    backends = {name: selected_backend(track, quality) for name, track in tracks.items()}
+    if quality == 'lalal_mixed' and 'lalal_full' not in backends.values():
+        raise ValueError('Für den Mischmodus benötigt mindestens ein Song bereits alle LALAL.AI-Instrumente.')
+    return backends
+
+
+def validate_routes(sections, backends):
+    from .engine import backing_components
+    for section in sections:
+        for source, stem in backing_components(section):
+            if stem in MELODIC and backends[source] != 'lalal_full':
+                raise ValueError(f'Track {source}: {stem} benötigt vollständig getrennte LALAL.AI-Instrumente.')
+
+
 def _sample(path: Path, start: float, seconds=3.):
     with sf.SoundFile(path) as audio:
         audio.seek(min(max(0, round(start*audio.samplerate)), len(audio)))
@@ -50,11 +67,13 @@ def _accent(track, start):
     return best[1] if best else None
 
 
-def suggest_instruments(sections, tracks):
+def suggest_instruments(sections, tracks, backends=None):
     """Route the core bed separately and add a low-level cross-song motif.
 
     No remote calls or paid processing happen here. Every stem is already cached.
     """
+    if backends is None:
+        backends = available_backends(tracks, 'lalal_full')
     for section in sections:
         main = section['instrumental']
         if main == 'hybrid':
@@ -68,7 +87,7 @@ def suggest_instruments(sections, tracks):
         # purpose without doubling the residual from their own original song.
         if section['effect'] in ('normal', 'build', 'drop'):
             accent_source = section['vocal'] if section['vocal'] not in ('none', bed) else ('A' if bed != 'A' else 'B')
-            if accent_source in tracks and accent_source != bed:
+            if accent_source in tracks and accent_source != bed and backends[accent_source] == 'lalal_full':
                 stem = _accent(tracks[accent_source], section.get('start_'+accent_source.lower(), 0))
                 if stem:
                     routing[stem] = accent_source

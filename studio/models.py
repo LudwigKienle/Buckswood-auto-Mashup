@@ -50,7 +50,7 @@ class RenderRequest(BaseModel):
     pitch_d: float | None = Field(default=None, ge=-6, le=6)
     key_match: bool = True
     pitch_b: float | None = Field(default=None, ge=-6, le=6)
-    separation_quality: Literal['auto', 'standard', 'hq', 'lalal', 'lalal_full'] = 'auto'
+    separation_quality: Literal['auto', 'standard', 'hq', 'lalal', 'lalal_full', 'lalal_mixed'] = 'auto'
     protect_vocal_phrases: bool = True
     preview: bool = False
     sections: list[Section] = Field(min_length=1, max_length=16)
@@ -63,8 +63,8 @@ class RenderRequest(BaseModel):
             used |= set(section.instrument_sources.values()) - {'off'}
             if not used <= available.keys():
                 raise ValueError('Für jede verwendete Spur muss ein Song ausgewählt sein.')
-            if section.instrument_sources and self.separation_quality != 'lalal_full':
-                raise ValueError('Einzelinstrumente benötigen LALAL.AI · alle Instrumente.')
+            if section.instrument_sources and self.separation_quality not in ('lalal_full', 'lalal_mixed'):
+                raise ValueError('Einzelinstrumente benötigen LALAL.AI-Instrumentenmodus.')
         return self
 
 class PairRequest(BaseModel):
@@ -79,7 +79,7 @@ class PairRequest(BaseModel):
     target_bpm: float | None = Field(default=None, ge=60, le=200)
     use_score: bool = True
 
-    separation_quality: Literal['auto', 'standard', 'hq', 'lalal', 'lalal_full'] = 'auto'
+    separation_quality: Literal['auto', 'standard', 'hq', 'lalal', 'lalal_full', 'lalal_mixed'] = 'auto'
 
 class LalalQuoteRequest(PairRequest):
     mode: Literal['vocals', 'all'] = 'vocals'

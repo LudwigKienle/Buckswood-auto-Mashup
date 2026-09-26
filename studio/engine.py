@@ -376,6 +376,11 @@ def render(request, job_id, progress, cancel):
         pitches[name] = explicit if explicit is not None else (semitones_between_keys(tracks[name]['key'], a['key']) if request.key_match else 0)
     from .separation import selected_backend, stems_folder
     backends = {name: selected_backend(track, request.separation_quality) for name,track in tracks.items()}
+    if request.separation_quality in ('lalal_full', 'lalal_mixed'):
+        from .instrument_arrangement import validate_routes
+        if request.separation_quality == 'lalal_mixed' and 'lalal_full' not in backends.values():
+            raise ValueError('Mindestens ein Song benötigt vollständig getrennte LALAL.AI-Instrumente.')
+        validate_routes(request.sections, backends)
     for i, (name, track) in enumerate(tracks.items()):
         if backends[name] == 'standard':
             separate(track, lambda _, msg: progress(5+round(i*35/len(tracks)), msg), cancel)
