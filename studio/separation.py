@@ -27,6 +27,13 @@ def installed():
 
 
 def selected_backend(track, quality='auto'):
+    if quality == 'lalal_mixed':
+        from .lalal import ready as lalal_ready
+        if lalal_ready(track, 'all'):
+            return 'lalal_full'
+        if lalal_ready(track):
+            return 'lalal'
+        return 'hq' if ready(track) else 'standard'
     if quality in ('lalal', 'lalal_full'):
         from .lalal import ready as lalal_ready
         if not lalal_ready(track, 'all' if quality == 'lalal_full' else 'vocals'):

@@ -82,7 +82,7 @@ def state():
 
 @app.get('/api/health')
 def health():
-    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 7, 'planner_version': 9, 'max_tracks': 4, 'lalal_all_instruments': True}
+    return {'app': 'Buckswood auto Mashup', 'ok': True, 'engine_version': 7, 'planner_version': 11, 'max_tracks': 4, 'lalal_all_instruments': True, 'individual_instrument_arrangement': True, 'mixed_instrument_backends': True}
 
 @app.post('/api/upload')
 async def upload(file: UploadFile):
@@ -121,6 +121,9 @@ def plan(pair: PairRequest):
     try:
         tracks = {name: read_track(id) for name, id in pair.track_ids().items()}
         sections = simple_plan(tracks)
+        if pair.separation_quality in ('lalal_full', 'lalal_mixed'):
+            from .instrument_arrangement import available_backends, suggest_instruments
+            suggest_instruments(sections, tracks, available_backends(tracks, pair.separation_quality))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     save_json(DATA/'project.json',pair.model_dump())
@@ -130,11 +133,25 @@ def plan(pair: PairRequest):
 def start_render(request: RenderRequest):
     from .engine import render
     try:
-        for track_id in request.track_ids().values():
-            read_track(track_id)
+        tracks = {name: read_track(id) for name,id in request.track_ids().items()}
+        if request.separation_quality in ('lalal_full', 'lalal_mixed'):
+            from .instrument_arrangement import available_backends, validate_routes
+            validate_routes(request.sections, available_backends(tracks, request.separation_quality))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return submit('render', lambda job_id, progress, cancel: render(request, job_id, progress, cancel))
+
+@app.post('/api/instrument-plan')
+def instrument_plan(request: RenderRequest):
+    if request.separation_quality not in ('lalal_full', 'lalal_mixed'):
+        raise HTTPException(400, 'Instrumentenplanung benötigt LALAL.AI-Instrumentenmodus.')
+    from .instrument_arrangement import available_backends, suggest_instruments
+    try:
+        tracks = {name: read_track(id) for name, id in request.track_ids().items()}
+        sections = [section.model_dump() for section in request.sections]
+        return {'sections': suggest_instruments(sections, tracks, available_backends(tracks, request.separation_quality))}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 @app.post('/api/intro-plan')
 def intro_plan(request: RenderRequest):
@@ -151,17 +168,27 @@ def quality_plan(pair: PairRequest):
     from .quality import plan
     try:
         tracks = {name: read_track(id) for name, id in pair.track_ids().items()}
+        if pair.separation_quality in ('lalal_full', 'lalal_mixed'):
+            from .instrument_arrangement import available_backends
+            available_backends(tracks, pair.separation_quality)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     def work(job_id, progress, cancel):
         from .separation import installed, separate_hq
-        if pair.separation_quality in ('auto', 'hq') and installed():
+        if pair.separation_quality in ('auto', 'hq', 'lalal_mixed') and installed():
+            from .lalal import ready as lalal_ready
             for i, (name, track) in enumerate(tracks.items()):
-                tracks[name] = separate_hq(track, lambda p,m: progress(round((i+p/100)*40/len(tracks)),m), cancel)
+                if pair.separation_quality != 'lalal_mixed' or not (lalal_ready(track, 'all') or lalal_ready(track)):
+                    tracks[name] = separate_hq(track, lambda p,m: progress(round((i+p/100)*40/len(tracks)),m), cancel)
         options = dict(target_bpm=pair.target_bpm, use_score=pair.use_score, separation_quality=pair.separation_quality)
         if len(tracks) > 2:
             options['extra_tracks'] = {k:v for k,v in tracks.items() if k not in ('A','B')}
-        return plan(tracks['A'], tracks['B'], lambda p,m: progress(round(40+p*.6),m), cancel, **options)
+        result = plan(tracks['A'], tracks['B'], lambda p,m: progress(round(40+p*.6),m), cancel, **options)
+        if pair.separation_quality in ('lalal_full', 'lalal_mixed'):
+            from .instrument_arrangement import available_backends, suggest_instruments
+            suggest_instruments(result['sections'], tracks, available_backends(tracks, pair.separation_quality))
+            result['analysis']['note'] += ' LALAL-Instrumente sind einzeln geplant; leise Akzente lassen sich pro Abschnitt ändern.'
+        return result
     return submit('plan', work)
 
 @app.post('/api/separate-hq')

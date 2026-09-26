@@ -308,6 +308,19 @@ def vocal_runs(sections, timing):
 
 
 def backing_components(section):
+    if section.instrument_sources:
+        routing = section.instrument_sources
+        # Keep correlated stems together through ONE stretch operation whenever
+        # possible. ``other`` is a subtraction residual; independent warps can
+        # otherwise bring drum/bass leakage back into the mix.
+        core = ('drums', 'bass', 'other')
+        if all(routing.get(stem) not in (None, 'off') and section.instrument_levels_db.get(stem, 0) == 0 for stem in core):
+            if len({routing[stem] for stem in core}) == 1:
+                source = routing['drums']
+                return ((source, 'instrumental'),) + tuple((s, stem) for stem,s in routing.items() if stem not in core and s != 'off')
+            if routing['bass'] == routing['other']:
+                return ((routing['drums'], 'drums'), (routing['bass'], 'harmony')) + tuple((s, stem) for stem,s in routing.items() if stem not in core and s != 'off')
+        return tuple((source, stem) for stem, source in routing.items() if source != 'off')
     return (('B', 'drums'), ('A', 'harmony')) if section.instrumental == 'hybrid' else ((section.instrumental, section.backing_stem),)
 
 
@@ -363,6 +376,11 @@ def render(request, job_id, progress, cancel):
         pitches[name] = explicit if explicit is not None else (semitones_between_keys(tracks[name]['key'], a['key']) if request.key_match else 0)
     from .separation import selected_backend, stems_folder
     backends = {name: selected_backend(track, request.separation_quality) for name,track in tracks.items()}
+    if request.separation_quality in ('lalal_full', 'lalal_mixed'):
+        from .instrument_arrangement import validate_routes
+        if request.separation_quality == 'lalal_mixed' and 'lalal_full' not in backends.values():
+            raise ValueError('Mindestens ein Song benötigt vollständig getrennte LALAL.AI-Instrumente.')
+        validate_routes(request.sections, backends)
     for i, (name, track) in enumerate(tracks.items()):
         if backends[name] == 'standard':
             separate(track, lambda _, msg: progress(5+round(i*35/len(tracks)), msg), cancel)
@@ -439,7 +457,10 @@ def render(request, job_id, progress, cancel):
             offset = head_length+round(preceding_bars*240/target*SR)
             head = voice_cache[key][offset-head_length:offset].copy()
             vocal = fit(voice_cache[key][offset:offset+length+tail_length].copy(), length+tail_length)
-        bed = sum(clip(source, stem) for source, stem in backing_components(section))
+        bed = np.zeros((length+tail_length, 2), np.float32)
+        for source, stem in backing_components(section):
+            level = section.instrument_levels_db.get(stem, 0.)
+            bed += clip(source, stem) * 10**(level/20)
         vocal = offset_audio(vocal, section.vocal_offset, target)
         vocal *= voice_gains.get(section.vocal, 1.)
         vocal *= 10**(section.vocal_db/20)
@@ -470,6 +491,8 @@ def render(request, job_id, progress, cancel):
         elapsed += length/SR
     continuations = [False]+[i in runs and runs[i][0] != i for i in range(1, len(sections))]
     bed_continuations = [False]+[backing_components(sections[i-1]) == backing_components(sections[i]) and
+        sections[i-1].instrument_levels_db == sections[i].instrument_levels_db and
+        sections[i-1].instrumental_db == sections[i].instrumental_db and
         all(beds[i, source, stem][0] != i for source, stem in backing_components(sections[i]))
         for i in range(1, len(sections))]
     vocal_edits = []
@@ -496,8 +519,9 @@ def render(request, job_id, progress, cancel):
                '-ar', str(SR), '-c:a', 'pcm_s24le', str(folder/'mashup.wav')])
     run_audio(['ffmpeg', '-v', 'error', '-y', '-i', str(folder/'mashup.wav'), '-c:a', 'libmp3lame', '-b:a', '320k', str(folder/'mashup.mp3')])
     check_cancel(cancel)
-    result = {'id': job_id, 'name': ('Anfang · V6' if request.preview else 'Arrangement · V6')+(' · LALAL.AI alle Instrumente' if all(v=='lalal_full' for v in backends.values()) else ' · LALAL.AI' if all(v=='lalal' for v in backends.values()) else ' · RoFormer' if all(v=='hq' for v in backends.values()) else ' · Demucs' if all(v=='standard' for v in backends.values()) else ' · gemischte Stems'), 'duration': round(elapsed, 2),
-              'bpm': target, 'pitch_b': pitch, 'pitches': pitches, 'tracks': {name: track['name'] for name, track in tracks.items()}, 'engine_version': 6, 'separation': backends, 'track_a': a['name'], 'track_b': b['name'], 'sections': report,
+    engine_version = 7 if any(section.instrument_sources for section in sections) else 6
+    result = {'id': job_id, 'name': ('Anfang' if request.preview else 'Arrangement')+f' · V{engine_version}'+(' · LALAL.AI alle Instrumente' if all(v=='lalal_full' for v in backends.values()) else ' · LALAL.AI' if all(v=='lalal' for v in backends.values()) else ' · RoFormer' if all(v=='hq' for v in backends.values()) else ' · Demucs' if all(v=='standard' for v in backends.values()) else ' · gemischte Stems'), 'duration': round(elapsed, 2),
+              'bpm': target, 'pitch_b': pitch, 'pitches': pitches, 'tracks': {name: track['name'] for name, track in tracks.items()}, 'engine_version': engine_version, 'separation': backends, 'track_a': a['name'], 'track_b': b['name'], 'sections': report,
               'warnings': warnings, 'request': request.model_dump(), 'mastering': {'target_lufs': -14, 'target_true_peak_db': -1.2},
               'processing': {'backing': 'sum-before-stretch; continuous source runs', 'pitch': 'Rubber Band high quality',
                              'mix': 'continuous EQ; zero-phase midrange duck; 180 ms release', 'grid_jitter_tolerance_ms': 12,
